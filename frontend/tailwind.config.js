@@ -1,6 +1,5 @@
-﻿import type { Config } from "tailwindcss";
-
-const config: Config = {
+﻿/** @type {import('tailwindcss').Config} */
+module.exports = {
   darkMode: ["class"],
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
@@ -44,7 +43,6 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // AutoSage custom semantic tokens
         verified: {
           DEFAULT: "#10b981",
           subtle: "rgba(16, 185, 129, 0.12)",
@@ -72,15 +70,8 @@ const config: Config = {
       },
       animation: {
         "pulse-subtle": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
-        "flow-dash": "dash 20s linear infinite",
-      },
-      keyframes: {
-        dash: {
-          to: { strokeDashoffset: "-1000" },
-        },
       },
     },
   },
   plugins: [],
 };
-export default config;
