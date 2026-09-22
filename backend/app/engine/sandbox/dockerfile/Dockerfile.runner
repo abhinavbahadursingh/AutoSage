@@ -1,0 +1,14 @@
+﻿FROM python:3.11-slim
+
+# Create unprivileged runner user
+RUN groupadd -g 10001 autosage && \
+    useradd -u 10001 -g autosage -m -s /bin/bash autosage
+
+WORKDIR /workspace
+
+COPY requirements-runner.txt .
+RUN pip install --no-cache-dir -r requirements-runner.txt
+
+USER autosage:autosage
+
+ENTRYPOINT ["python"]
