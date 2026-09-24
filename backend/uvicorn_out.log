@@ -1,0 +1,9 @@
+{"timestamp": "2026-09-24T10:20:58.933613+00:00", "level": "INFO", "logger": "autosage.observability", "message": "opentelemetry_initialized_no_exporter"}
+{"timestamp": "2026-09-24T10:20:58.938126+00:00", "level": "INFO", "logger": "autosage.observability", "message": "opentelemetry_libraries_instrumented"}
+{"timestamp": "2026-09-24T10:20:58.938126+00:00", "level": "INFO", "logger": "autosage.observability", "message": "fastapi_instrumented"}
+{"timestamp": "2026-09-24T10:20:58.956025+00:00", "level": "INFO", "logger": "autosage", "message": "startup", "extra": {"service": "autosage-backend", "version": "0.1.0", "env": "development"}}
+{"timestamp": "2026-09-24T10:20:58.998059+00:00", "level": "INFO", "logger": "autosage", "message": "database_engine_initialized"}
+{"timestamp": "2026-09-24T10:21:14.075116+00:00", "level": "WARNING", "logger": "autosage", "message": "postgres_probe_failed", "extra": {"error": "TimeoutError: "}}
+{"timestamp": "2026-09-24T10:21:14.076620+00:00", "level": "WARNING", "logger": "autosage", "message": "postgres_unreachable_on_startup"}
+{"timestamp": "2026-09-24T10:21:14.079625+00:00", "level": "INFO", "logger": "autosage", "message": "database_engine_closed"}
+{"timestamp": "2026-09-24T10:21:14.079625+00:00", "level": "INFO", "logger": "autosage", "message": "shutdown"}

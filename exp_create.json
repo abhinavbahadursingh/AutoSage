@@ -1,0 +1,1 @@
+{"name": "E2E Test", "description": "from curl", "workspace_id": "40e3b514-b818-4262-90b2-f6b7ace06f62", "config": {"prompt": "test", "dataset": "iris", "task_type": "classification", "target_column": "species", "evaluation_metric": "f1", "split_strategy": "random", "imbalance_handling": "none", "source": "e2e"}, "max_retries": 3}

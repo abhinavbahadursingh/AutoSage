@@ -1,24 +1,13 @@
-﻿"""Database engine and async session dependency."""
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from app.core.config import settings
+﻿"""Backward-compatible re-exports.
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    future=True
+The canonical database layer lives in :mod:`app.db`. This module keeps the
+old import path (``app.core.database``) working for existing code.
+"""
+from app.db.session import (  # noqa: F401
+    AsyncSessionLocal,
+    check_connection,
+    close_engine,
+    engine,
+    get_db,
+    init_engine,
 )
-
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False
-)
-
-async def get_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()

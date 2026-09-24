@@ -9,10 +9,14 @@ class EvidenceTrailNode(Base):
     __tablename__ = "evidence_trail_nodes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="CASCADE"), nullable=False)
+    run_id = Column(
+        UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
     parent_node_id = Column(UUID(as_uuid=True), ForeignKey("evidence_trail_nodes.id", ondelete="SET NULL"), nullable=True)
     agent_name = Column(String(100), nullable=False)
     decision_type = Column(String(100), nullable=False)
     rationale = Column(Text, nullable=False)
     empirical_evidence = Column(JSONB, default={})
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

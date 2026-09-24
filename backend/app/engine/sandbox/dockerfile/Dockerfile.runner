@@ -9,6 +9,9 @@ WORKDIR /workspace
 COPY requirements-runner.txt .
 RUN pip install --no-cache-dir -r requirements-runner.txt
 
+# Copy training script
+COPY train_script.py /workspace/train_script.py
+
 USER autosage:autosage
 
 ENTRYPOINT ["python"]
