@@ -49,14 +49,14 @@ class RetrieveMemoryTool(BaseTool):
     input_model = RetrieveMemoryInput
 
     def run(self, params: BaseModel) -> Dict[str, Any]:
-        import asyncio
         assert isinstance(params, RetrieveMemoryInput)
 
-        from app.db.session import AsyncSessionLocal
+        from app.db import session as _db_session
         from sqlalchemy.ext.asyncio import AsyncSession
 
         async def _retrieve() -> Dict[str, Any]:
-            async with AsyncSessionLocal() as session:
+            _db_session.init_engine()  # ensure AsyncSessionLocal is bound to this loop
+            async with _db_session.AsyncSessionLocal() as session:
                 service = MemoryRetrievalService(session)
 
                 preferred_types = None
@@ -99,7 +99,8 @@ class RetrieveMemoryTool(BaseTool):
                     "strategy_used": result.strategy_used,
                 }
 
-        return asyncio.run(_retrieve())
+        from app.engine.llm.client import run_coro_sync
+        return run_coro_sync(_retrieve())
 
 
 class StoreMemoryTool(BaseTool):
@@ -108,14 +109,14 @@ class StoreMemoryTool(BaseTool):
     input_model = StoreMemoryInput
 
     def run(self, params: BaseModel) -> Dict[str, Any]:
-        import asyncio
         assert isinstance(params, StoreMemoryInput)
 
-        from app.db.session import AsyncSessionLocal
+        from app.db import session as _db_session
         from sqlalchemy.ext.asyncio import AsyncSession
 
         async def _store() -> Dict[str, Any]:
-            async with AsyncSessionLocal() as session:
+            _db_session.init_engine()  # ensure AsyncSessionLocal is bound to this loop
+            async with _db_session.AsyncSessionLocal() as session:
                 service = MemoryRetrievalService(session)
 
                 memory_type = MemoryType(params.memory_type)
@@ -144,4 +145,5 @@ class StoreMemoryTool(BaseTool):
                     "created_at": memory.created_at.isoformat() if memory.created_at else None,
                 }
 
-        return asyncio.run(_store())
+        from app.engine.llm.client import run_coro_sync
+        return run_coro_sync(_store())

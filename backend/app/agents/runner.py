@@ -30,6 +30,7 @@ def run_experiment_workflow(
     max_attempts: Optional[int] = None,
     fail_stage: Optional[str] = None,
     checkpointer: Optional[Any] = None,
+    experiment_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute the full workflow synchronously; return the final state.
 
@@ -43,6 +44,7 @@ def run_experiment_workflow(
         workspace_id=workspace_id,
         max_attempts=max_attempts or settings.WORKFLOW_MAX_ATTEMPTS,
         fail_stage=fail_stage,
+        experiment_config=experiment_config,
     )
     config = {"configurable": {"thread_id": thread_id_for(experiment_id)}}
     

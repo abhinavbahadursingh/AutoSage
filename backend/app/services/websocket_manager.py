@@ -41,11 +41,11 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, experiment_id: UUID) -> str:
-        """Accept a new WebSocket connection for an experiment.
+        """Register an already-accepted WebSocket on an experiment channel.
 
-        Returns a unique connection_id for this session.
+        Callers must ``accept()`` first (endpoints accept before auth so
+        failures close as WS 1008, not HTTP 403). Double-accept raises.
         """
-        await websocket.accept()
         connection_id = str(uuid.uuid4())
 
         async with self._lock:
@@ -222,6 +222,115 @@ class ConnectionManager:
                 pass
 
         logger.info("ws_shutdown_complete")
+
+
+# ---- Cross-process event bridge (Redis pub/sub) ----
+#
+# The manager above is in-memory per process. With eager Celery mode the
+# worker shares the API process, so local broadcast is enough — but with a
+# real split worker the task publishes in the WORKER process while WS clients
+# live in the API process. The bridge forwards events worker -> Redis ->
+# API, which rebroadcasts them locally. Redis is optional: when unreachable
+# everything degrades to the frontend's polling fallback.
+
+EVENTS_CHANNEL_PREFIX = "autosage:events:"
+
+
+def _bridge_redis_url() -> Optional[str]:
+    try:
+        from app.core.config import settings
+
+        return settings.REDIS_URL or None
+    except Exception:
+        return None
+
+
+async def publish_event_external(event: ExperimentEvent) -> None:
+    """Best-effort PUBLISH of one event to Redis for other processes.
+
+    Never raises; silently skipped when Redis is unreachable (single-process
+    dev without Redis keeps working via local broadcast + polling).
+    """
+    url = _bridge_redis_url()
+    if not url:
+        return
+    try:
+        import redis.asyncio as redis_async
+
+        client = redis_async.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            payload = ServerMessage(type="event", event=event).model_dump_json()
+            await client.publish(f"{EVENTS_CHANNEL_PREFIX}{event.experiment_id}", payload)
+        finally:
+            await client.aclose()
+    except Exception as exc:
+        logger.debug("ws_bridge_publish_skipped", extra={"error": str(exc)})
+
+
+_bridge_task: Optional[asyncio.Task] = None
+
+
+async def _bridge_loop() -> None:
+    """Subscribe to ``autosage:events:*`` and rebroadcast locally, forever.
+
+    Runs as a lifespan background task in the API process. Reconnects with
+    backoff; never raises (a dead bridge just means polling fallback).
+    """
+    import redis.asyncio as redis_async
+
+    manager = get_connection_manager()
+    while True:
+        url = _bridge_redis_url()
+        if not url:
+            await asyncio.sleep(10)
+            continue
+        try:
+            client = redis_async.from_url(url, socket_connect_timeout=3, socket_timeout=15)
+            try:
+                pubsub = client.pubsub()
+                await pubsub.psubscribe(f"{EVENTS_CHANNEL_PREFIX}*")
+                async for message in pubsub.listen():
+                    if message.get("type") != "pmessage":
+                        continue
+                    try:
+                        data = message["data"]
+                        if isinstance(data, bytes):
+                            data = data.decode("utf-8")
+                        srv = ServerMessage.model_validate_json(data)
+                        if srv.type == "event" and srv.event is not None:
+                            await manager.broadcast(srv.event.experiment_id, srv.event)
+                    except Exception:
+                        logger.debug("ws_bridge_bad_message_skipped")
+            finally:
+                try:
+                    await pubsub.close()
+                except Exception:
+                    pass
+                await client.aclose()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("ws_bridge_reconnect", extra={"error": str(exc)})
+        await asyncio.sleep(5)
+
+
+async def start_event_bridge() -> None:
+    """Start the Redis subscriber loop (API lifespan). Idempotent."""
+    global _bridge_task
+    if _bridge_task is None or _bridge_task.done():
+        _bridge_task = asyncio.create_task(_bridge_loop(), name="ws-event-bridge")
+
+
+async def stop_event_bridge() -> None:
+    """Stop the Redis subscriber loop (API shutdown). Never raises."""
+    global _bridge_task
+    task, _bridge_task = _bridge_task, None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 # Global instance (singleton pattern for FastAPI lifespan)

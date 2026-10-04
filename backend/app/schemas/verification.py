@@ -71,6 +71,17 @@ class VerifyExperimentRequest(BaseModel):
     agent_name: Optional[str] = None
 
 
+class StaticCheckResponse(BaseModel):
+    """One static gate check (AST/security, leakage, metric sanity, baseline)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    passed: bool
+    skipped: bool = False
+    details: List[str] = []
+    artifact: str = ""
+
+
 class VerificationResponse(BaseModel):
     """Full verification response."""
     model_config = ConfigDict(from_attributes=True)
@@ -83,6 +94,7 @@ class VerificationResponse(BaseModel):
     conflict_count: int
     rejected_count: int
     unverified_count: int
+    static_checks: List[StaticCheckResponse] = []
 
 
 class EvidenceSourceInfo(BaseModel):

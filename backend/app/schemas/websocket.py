@@ -95,6 +95,18 @@ class AgentFailed(EventBase):
     payload: AgentFailedPayload
 
 
+class AgentWarningPayload(BaseModel):
+    agent_name: str
+    stage: str
+    warning: str
+    error: Optional[str] = None
+
+
+class AgentWarning(EventBase):
+    event_type: Literal["agent.warning"] = "agent.warning"
+    payload: AgentWarningPayload
+
+
 # ---- Verification events ----
 
 class VerificationStartedPayload(BaseModel):
@@ -157,6 +169,7 @@ ExperimentEvent = (
     | AgentStarted
     | AgentCompleted
     | AgentFailed
+    | AgentWarning
     | VerificationStarted
     | VerificationCompleted
     | MLStarted

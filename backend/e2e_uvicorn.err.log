@@ -1,0 +1,104 @@
+INFO:     Started server process [36236]
+INFO:     Waiting for application startup.
+[2026-10-04 17:05:30,809: INFO/MainProcess] embedded_worker_started
+[2026-10-04 17:05:30,954: INFO/MainProcess] Connected to sqla+sqlite:///D:/autoSage/data/celery_broker.db
+[2026-10-04 17:05:30,975: INFO/MainProcess] celery@AbhinavSingh ready.
+[2026-10-04 17:05:39,058: INFO/MainProcess] postgres_connected
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+[2026-10-04 17:21:01,679: INFO/MainProcess] user_provisioned
+[2026-10-04 17:21:21,456: INFO/MainProcess] experiment_enqueued
+[2026-10-04 17:21:21,944: INFO/MainProcess] Task experiments.run_experiment[b9e78136-b9d5-41de-b2b6-6fd0f7c628ed] received
+[2026-10-04 17:21:21,944: INFO/MainProcess] task_started
+[2026-10-04 17:21:22,037: INFO/MainProcess] database_engine_initialized
+[2026-10-04 17:21:33,894: WARNING/MainProcess] C:\Users\abhin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pydantic\main.py:542: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `dict[str, any]` - serialized value may not be as expected [field_name='payload', input_value=ExperimentStartedPayload(...mary_metric': 'recall'}), input_type=ExperimentStartedPayload])
+  return self.__pydantic_serializer__.to_json(
+
+[2026-10-04 17:21:34,967: INFO/MainProcess] database_engine_initialized
+[2026-10-04 17:21:43,590: WARNING/MainProcess] 2026/10/04 17:21:43 INFO mlflow.agent.hint: Load the `instrumenting-with-mlflow-tracing` skill at C:\Users\abhin\AppData\Local\Programs\Python\Python311\Lib\site-packages\mlflow\assistant\skills\instrumenting-with-mlflow-tracing\SKILL.md before writing any tracing code; it ships with this MLflow install. Set MLFLOW_DISABLE_AGENT_HINT=1 to silence this.
+[2026-10-04 17:21:44,387: INFO/MainProcess] workflow_execution_start
+[2026-10-04 17:21:44,387: INFO/MainProcess] workflow_start
+[2026-10-04 17:21:44,397: INFO/MainProcess] workflow_node.orchestrator_start
+[2026-10-04 17:21:44,397: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:21:46,407: INFO/MainProcess] tool_execution_start
+[2026-10-04 17:21:46,407: INFO/MainProcess] database_engine_initialized
+[2026-10-04 17:21:46,407: WARNING/MainProcess] tool_failed
+[2026-10-04 17:21:46,407: INFO/MainProcess] tool_execution_completed
+[2026-10-04 17:21:46,407: INFO/MainProcess] workflow_stage
+[2026-10-04 17:21:48,417: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:21:48,422: INFO/MainProcess] workflow_node.orchestrator_completed
+[2026-10-04 17:21:48,432: INFO/MainProcess] workflow_node.discovery_start
+[2026-10-04 17:21:48,482: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:21:50,477: INFO/MainProcess] agent_llm_call_start
+[2026-10-04 17:21:50,480: INFO/MainProcess] llm_completion_start
+[2026-10-04 17:21:51,748: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-10-04 17:21:51,750: INFO/MainProcess] llm_completion_completed
+[2026-10-04 17:21:51,752: INFO/MainProcess] agent_llm_call_completed
+[2026-10-04 17:21:51,752: INFO/MainProcess] agent_llm_ok
+[2026-10-04 17:21:51,752: INFO/MainProcess] workflow_stage
+[2026-10-04 17:21:53,764: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:21:53,764: INFO/MainProcess] workflow_node.discovery_completed
+[2026-10-04 17:21:53,764: INFO/MainProcess] workflow_node.profiler_start
+[2026-10-04 17:21:53,766: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:21:55,546: INFO/MainProcess] database_engine_initialized
+[2026-10-04 17:21:55,753: INFO/MainProcess] agent_llm_call_start
+[2026-10-04 17:21:55,755: INFO/MainProcess] llm_completion_start
+[2026-10-04 17:21:57,509: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-10-04 17:21:57,511: INFO/MainProcess] llm_completion_completed
+[2026-10-04 17:21:57,513: INFO/MainProcess] agent_llm_call_completed
+[2026-10-04 17:21:57,513: INFO/MainProcess] agent_llm_ok
+[2026-10-04 17:21:57,513: INFO/MainProcess] workflow_stage
+[2026-10-04 17:21:59,506: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:21:59,508: INFO/MainProcess] workflow_node.profiler_completed
+[2026-10-04 17:21:59,508: INFO/MainProcess] workflow_node.preprocessor_start
+[2026-10-04 17:21:59,508: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:22:01,511: INFO/MainProcess] agent_llm_call_start
+[2026-10-04 17:22:01,511: INFO/MainProcess] llm_completion_start
+[2026-10-04 17:22:01,860: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+[2026-10-04 17:22:02,923: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+[2026-10-04 17:22:02,923: INFO/MainProcess] llm_completion_completed
+[2026-10-04 17:22:02,933: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-04 17:22:02,933: WARNING/MainProcess] agent_llm_fallback
+[2026-10-04 17:22:04,947: INFO/MainProcess] tool_execution_start
+[2026-10-04 17:22:04,948: INFO/MainProcess] tool_ok
+[2026-10-04 17:22:04,948: INFO/MainProcess] tool_execution_completed
+[2026-10-04 17:22:04,948: INFO/MainProcess] workflow_stage
+[2026-10-04 17:22:06,947: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:22:06,947: INFO/MainProcess] workflow_node.preprocessor_completed
+[2026-10-04 17:22:06,947: INFO/MainProcess] workflow_node.model_selector_start
+[2026-10-04 17:22:06,947: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:22:08,958: INFO/MainProcess] agent_llm_call_start
+[2026-10-04 17:22:08,959: INFO/MainProcess] llm_completion_start
+[2026-10-04 17:22:09,577: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+[2026-10-04 17:22:10,624: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+[2026-10-04 17:22:10,624: INFO/MainProcess] llm_completion_completed
+[2026-10-04 17:22:10,624: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-04 17:22:10,624: WARNING/MainProcess] agent_llm_fallback
+[2026-10-04 17:22:12,628: INFO/MainProcess] workflow_stage
+[2026-10-04 17:22:14,631: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:22:14,631: INFO/MainProcess] workflow_node.model_selector_completed
+[2026-10-04 17:22:14,631: INFO/MainProcess] workflow_node.ml_experiment_start
+[2026-10-04 17:22:14,634: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:22:18,634: INFO/MainProcess] tool_execution_start
+[2026-10-04 17:22:25,157: WARNING/MainProcess] MODEL_EVALUATED random_forest recall=0.6987951807228916 accuracy=0.7004968062455642 precision=0.33397312859884837 recall=0.6987951807228916 f1=0.6229466822240259
+[2026-10-04 17:23:58,282: WARNING/MainProcess] MODEL_EVALUATED gradient_boosting recall=0.13253012048192772 accuracy=0.8310858765081618 precision=0.6 recall=0.13253012048192772 f1=0.5612177071557175
+[2026-10-04 17:23:59,457: WARNING/MainProcess] MODEL_EVALUATED logistic_regression recall=0.606425702811245 accuracy=0.7650816181689141 precision=0.3932291666666667 recall=0.606425702811245 f1=0.6628028963816919
+[2026-10-04 17:23:59,499: INFO/MainProcess] tool_ok
+[2026-10-04 17:23:59,499: INFO/MainProcess] tool_execution_completed
+[2026-10-04 17:23:59,499: INFO/MainProcess] workflow_stage
+[2026-10-04 17:24:03,519: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:24:03,520: INFO/MainProcess] workflow_node.ml_experiment_completed
+[2026-10-04 17:24:03,521: INFO/MainProcess] workflow_node.verification_start
+[2026-10-04 17:24:03,521: INFO/MainProcess] workflow_node_start
+[2026-10-04 17:24:05,536: INFO/MainProcess] tool_execution_start
+[2026-10-04 17:24:05,538: INFO/MainProcess] tool_ok
+[2026-10-04 17:24:05,538: INFO/MainProcess] tool_execution_completed
+[2026-10-04 17:24:05,538: INFO/MainProcess] workflow_stage
+[2026-10-04 17:24:09,561: INFO/MainProcess] workflow_node_complete
+[2026-10-04 17:24:09,562: INFO/MainProcess] workflow_node.verification_completed
+[2026-10-04 17:24:09,563: INFO/MainProcess] workflow_done
+[2026-10-04 17:24:09,563: INFO/MainProcess] workflow_execution_completed
+[2026-10-04 17:24:16,728: INFO/MainProcess] experiment_completed
+[2026-10-04 17:24:17,126: INFO/MainProcess] Task experiments.run_experiment[b9e78136-b9d5-41de-b2b6-6fd0f7c628ed] succeeded in 175.18700000000536s: {'experiment_id': '2f01fc97-f0ee-4ca8-930f-d84fb59f7d75', 'status': 'COMPLETED', 'stages_completed': ['orchestrator', 'discovery', 'profiler', 'preprocessor', 'model_selector', 'ml_experiment', 'verification']}
+[2026-10-04 17:24:17,126: INFO/MainProcess] task_completed

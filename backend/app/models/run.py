@@ -28,4 +28,4 @@ class PipelineRun(Base):
     completed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    experiment = relationship("Experiment", back_populates="pipeline_runs", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="pipeline_runs")

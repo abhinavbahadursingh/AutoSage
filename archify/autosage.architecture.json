@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AutoSage — Repository Architecture",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "browser", "type": "frontend", "label": "Web Client", "sublabel": "React 19 + Vite", "pos": [40, 260], "size": [130, 64] },
+    { "id": "auth", "type": "security", "label": "JWT Auth", "sublabel": "JWKS / HS256", "pos": [260, 90], "size": [130, 64] },
+    { "id": "api", "type": "backend", "label": "FastAPI Server", "sublabel": "app/main.py · /api/v1", "pos": [260, 260], "size": [130, 64] },
+    { "id": "redis", "type": "messagebus", "label": "Redis Broker", "sublabel": "Celery queue", "pos": [480, 90], "size": [130, 64] },
+    { "id": "worker", "type": "backend", "label": "Celery Worker", "sublabel": "experiments queue", "pos": [480, 260], "size": [130, 64] },
+    { "id": "graph", "type": "backend", "label": "LangGraph Agents", "sublabel": "app/agents/graph.py", "pos": [700, 260], "size": [130, 64] },
+    { "id": "llm", "type": "external", "label": "LLM Providers", "sublabel": "OpenRouter · Groq", "pos": [700, 90], "size": [130, 64] },
+    { "id": "sandbox", "type": "backend", "label": "Docker Sandbox", "sublabel": "network-less trainer", "pos": [920, 260], "size": [130, 64] },
+    { "id": "postgres", "type": "database", "label": "PostgreSQL", "sublabel": "pgvector · 18 models", "pos": [260, 430], "size": [130, 64] },
+    { "id": "mlflow", "type": "database", "label": "MLflow Tracking", "sublabel": "runs · metrics · artifacts", "pos": [920, 430], "size": [130, 64] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "Sandbox trust zone", "wraps": ["sandbox"] }
+  ],
+  "connections": [
+    { "id": "e-web-api", "from": "browser", "to": "api", "label": "REST", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "e-api-auth", "from": "api", "to": "auth", "label": "verify JWT", "variant": "security", "fromSide": "top", "toSide": "bottom" },
+    { "id": "e-api-redis", "from": "api", "to": "redis", "label": "enqueue", "fromSide": "right", "toSide": "left" },
+    { "id": "e-redis-worker", "from": "redis", "to": "worker", "label": "consume", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "e-worker-graph", "from": "worker", "to": "graph", "label": "LangGraph", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "e-graph-sandbox", "from": "graph", "to": "sandbox", "label": "train script", "fromSide": "right", "toSide": "left" },
+    { "id": "e-graph-llm", "from": "graph", "to": "llm", "label": "LLM calls", "fromSide": "top", "toSide": "bottom" },
+    { "id": "e-sandbox-mlflow", "from": "sandbox", "to": "mlflow", "label": "metrics · artifacts", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "e-api-postgres", "from": "api", "to": "postgres", "label": "SQL", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "e-worker-postgres", "from": "worker", "to": "postgres", "label": "pgvector", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Request path",
+      "items": [
+        "SPA calls FastAPI under /api/v1",
+        "JWT verified once in app/api/deps.py",
+        "Runs queued through Celery + Redis"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Experiment run",
+      "items": [
+        "LangGraph pipeline executes inside the worker",
+        "Training runs in Docker with no network",
+        "Verified results written to pgvector"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Platform services",
+      "items": [
+        "LLM gateway with heuristic fallback",
+        "Supabase auth + file storage",
+        "docker-compose: Postgres, Redis, MLflow"
+      ]
+    }
+  ]
+}

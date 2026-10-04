@@ -1,16 +1,5 @@
 import type { AgentNode, Experiment } from '../../lib/types'
-
-const STEPS: { label: string }[] = [
-  { label: 'Request' },
-  { label: 'Dataset' },
-  { label: 'Profile' },
-  { label: 'Prepare' },
-  { label: 'Model' },
-  { label: 'Train' },
-  { label: 'Evaluate' },
-  { label: 'Verify' },
-  { label: 'Pipeline' },
-]
+import { STAGE_META } from '../../data/experiments'
 
 function dotClass(state: AgentNode['state']) {
   if (state === 'done') return 'border-verify-500 bg-verify-500'
@@ -34,14 +23,15 @@ export function ExecutionTimeline({
   return (
     <div className="flex items-start justify-between gap-0 overflow-x-auto pb-1">
       {nodes.map((node, i) => {
-        const step = STEPS[i] ?? { label: node.stage }
+        const meta = STAGE_META.find((m) => m.id === node.stage)
+        const label = meta?.short ?? node.stage
         const selected = selectedId === node.id
         const filled = i > 0 && nodes[i - 1].state === 'done' && node.state !== 'idle'
         return (
           <div key={node.id} className="flex min-w-[76px] flex-1 items-center last:min-w-0">
             <button
               onClick={() => onSelect(node.id)}
-              title={`${step.label} — ${node.agent}`}
+              title={`${meta?.label ?? node.stage} — ${node.agent}`}
               className="group flex flex-col items-center gap-2 outline-none"
             >
               <span
@@ -60,14 +50,12 @@ export function ExecutionTimeline({
                         : 'text-paper-500 group-hover:text-paper-300'
                 }`}
               >
-                {step.label}
+                {label}
               </span>
             </button>
             {i < nodes.length - 1 && (
               <span
-                className={`mx-1 h-px flex-1 transition-colors duration-500 ${
-                  filled ? 'bg-verify-500/45' : 'bg-ink-700'
-                }`}
+                className={`mx-1 h-px flex-1 transition-colors duration-500 ${filled ? 'bg-verify-500/45' : 'bg-ink-700'}`}
               />
             )}
           </div>

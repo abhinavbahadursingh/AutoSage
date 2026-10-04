@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 import pytest
+from celery.result import allow_join_result
 from fastapi.testclient import TestClient
 
 from app.core.security import create_access_token
@@ -98,12 +99,23 @@ def token_for(email: str, user_id: UUID) -> str:
     return create_access_token(str(user_id), {"email": email, "name": "W"})
 
 
+def run_task_inline(*args: Any) -> Dict[str, Any]:
+    """Run ``run_experiment`` eagerly and read its return value.
+
+    Starting the app (TestClient lifespan) boots the embedded Celery worker,
+    after which Celery treats ``result.get()`` as a nested join and raises.
+    ``allow_join_result`` is the sanctioned way to read an eager result.
+    """
+    with allow_join_result():
+        return run_experiment.apply(args=[str(a) for a in args]).get()
+
+
 # -- background execution + status sync ---------------------------------------
 def test_background_task_runs_workflow_to_completed(
-    patched_task_session: FakeAsyncSession, eager_celery: None
+    patched_task_session: FakeAsyncSession, eager_celery: None, recall_experiment_config: dict
 ) -> None:
-    experiment = seed_experiment(patched_task_session)
-    result = run_experiment.apply(args=[str(experiment.id)]).get()
+    experiment = seed_experiment(patched_task_session, config=dict(recall_experiment_config))
+    result = run_task_inline(experiment.id)
 
     assert result["status"] == "COMPLETED"
     assert result["stages_completed"] == [
@@ -117,9 +129,32 @@ def test_background_task_runs_workflow_to_completed(
     ]
     final = patched_task_session._store[Experiment][experiment.id]
     assert final.status == "COMPLETED"
-    assert final.result_summary["ml_result"]["value"] == 0.87
-    assert final.result_summary["verification"]["passed"] is True
+    summary = final.result_summary
+    # Canonical result keys, carrying the requested objective.
+    assert summary["primary_metric"] == "recall"
+    assert summary["primary_score"] is not None
+    assert summary["selected_model"]
+    assert len(summary["model_comparison"]) >= 2
+    assert summary["metrics"]["recall"] is not None
+    assert {"accuracy", "precision", "recall", "f1"} <= set(summary["metrics"])
+    assert summary["ml_result"]["value"] == summary["primary_score"]
+    assert summary["verification"]["passed"] is True
+    assert summary["verification"]["primary_metric"] == "recall"
     assert final.celery_task_id  # task id tracked on the row
+
+
+def test_background_task_abstains_without_a_dataset(
+    patched_task_session: FakeAsyncSession, eager_celery: None
+) -> None:
+    """No dataset => no fabricated score; the gate abstains and the run fails."""
+    experiment = seed_experiment(patched_task_session, config={"dataset_name": "missing.csv"})
+    result = run_task_inline(experiment.id)
+
+    assert result["status"] == "FAILED"
+    summary = patched_task_session._store[Experiment][experiment.id].result_summary
+    assert summary["primary_score"] is None
+    assert summary["selected_model"] is None
+    assert summary["verification"]["abstained"] is True
 
 
 def test_task_retry_then_terminal_failure(
@@ -130,7 +165,7 @@ def test_task_retry_then_terminal_failure(
         max_retries=1,
         config={"mock_fail_stage": "ml_experiment"},
     )
-    result = run_experiment.apply(args=[str(experiment.id)]).get()
+    result = run_task_inline(experiment.id)
 
     assert result["status"] == "FAILED"
     final = patched_task_session._store[Experiment][experiment.id]
@@ -142,14 +177,14 @@ def test_task_retry_then_terminal_failure(
 def test_task_skips_missing_cancelled_and_finished(
     patched_task_session: FakeAsyncSession, eager_celery: None
 ) -> None:
-    missing = run_experiment.apply(args=[str(uuid.uuid4())]).get()
+    missing = run_task_inline(uuid.uuid4())
     assert missing["status"] == "UNKNOWN"
 
     cancelled = seed_experiment(patched_task_session, status="CANCELLED")
-    assert run_experiment.apply(args=[str(cancelled.id)]).get()["status"] == "CANCELLED"
+    assert run_task_inline(cancelled.id)["status"] == "CANCELLED"
 
     done = seed_experiment(patched_task_session, status="COMPLETED")
-    assert run_experiment.apply(args=[str(done.id)]).get()["status"] == "COMPLETED"
+    assert run_task_inline(done.id)["status"] == "COMPLETED"
 
 
 def test_failure_sync_safety_net(patched_task_session: FakeAsyncSession) -> None:
@@ -204,21 +239,34 @@ def test_api_start_full_run_eager(
     client: TestClient,
     patched_task_session: FakeAsyncSession,
     eager_celery: None,
+    recall_experiment_config: dict,
 ) -> None:
     headers = _headers_for_fresh_user()
     ws = client.post("/api/v1/workspaces", json={"name": "WS"}, headers=headers).json()
     created = client.post(
         "/api/v1/experiments",
-        json={"name": "E", "workspace_id": ws["id"]},
+        json={
+            "name": "E",
+            "workspace_id": ws["id"],
+            "config": dict(recall_experiment_config),
+        },
         headers=headers,
     ).json()
+    # The request objective is normalized into the stored config.
+    assert created["config"]["primary_metric"] == "recall"
+    assert created["config"]["compare_models"] is True
+
     started = client.post(f"/api/v1/experiments/{created['id']}/start", headers=headers)
     assert started.status_code == 200
     # Eager inline run finished before the response was sent.
     assert started.json()["status"] == "COMPLETED"
     assert started.json()["celery_task_id"]
     detail = client.get(f"/api/v1/experiments/{created['id']}", headers=headers)
-    assert detail.json()["result_summary"]["ml_result"]["value"] == 0.87
+    summary = detail.json()["result_summary"]
+    assert summary["primary_metric"] == "recall"
+    assert summary["primary_score"] is not None
+    assert summary["selected_model"]
+    assert len(summary["model_comparison"]) >= 2
 
 
 def _headers_for_fresh_user() -> Dict[str, str]:

@@ -40,14 +40,11 @@ class User(Base):
     )
 
     projects = relationship(
-        "Project", back_populates="owner", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "Project", back_populates="owner", cascade="all, delete-orphan")
     workspaces = relationship(
-        "Workspace", back_populates="owner", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "Workspace", back_populates="owner", cascade="all, delete-orphan")
     files = relationship(
-        "FileMetadata", back_populates="owner", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "FileMetadata", back_populates="owner", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<User id={self.id} email={self.email!r}>"

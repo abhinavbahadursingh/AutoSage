@@ -1,0 +1,1 @@
+{"config":{"source":"probe","target_column":"species","prompt":"classify iris species","imbalance_handling":"none","evaluation_metric":"f1","split_strategy":"random","task_type":"classification","dataset":"iris"},"workspace_id":"861cb5f0-3689-4dcf-979b-ec5391742aee","name":"VerifyGateProbe","max_retries":1}

@@ -35,13 +35,11 @@ class Pipeline(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    experiment = relationship("Experiment", back_populates="pipelines", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="pipelines")
     agent_executions = relationship(
-        "AgentExecution", back_populates="pipeline", lazy="selectin"
-    )
+        "AgentExecution", back_populates="pipeline")
     artifacts = relationship(
-        "Artifact", back_populates="pipeline", lazy="selectin"
-    )
+        "Artifact", back_populates="pipeline")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Pipeline id={self.id} status={self.status!r}>"

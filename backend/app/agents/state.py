@@ -17,6 +17,8 @@ appended to ``tool_calls`` for observability.
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 import operator
 
+from app.engine.metrics import resolve_compare_models, resolve_primary_metric
+
 
 class ExperimentWorkflowState(TypedDict, total=False):
     """Shared typed state for one experiment run."""
@@ -49,6 +51,16 @@ class ExperimentWorkflowState(TypedDict, total=False):
     # Test/ops hook: name of the stage that must raise (simulates failure).
     fail_stage: Optional[str]
 
+    # Experiment config from the API (dataset, target_column, task_type, ...).
+    # Threaded into the initial state so agents can prompt from it.
+    config: Dict[str, Any]
+
+    # Objective of the run, resolved once from the request config and then
+    # carried unchanged through selection, evaluation and verification so no
+    # stage can silently substitute a different metric.
+    primary_metric: str
+    compare_models: bool
+
 
 def initial_workflow_state(
     *,
@@ -56,8 +68,11 @@ def initial_workflow_state(
     workspace_id: str,
     max_attempts: int,
     fail_stage: Optional[str] = None,
+    experiment_config: Optional[Dict[str, Any]] = None,
 ) -> ExperimentWorkflowState:
     """Build the entry state for a fresh workflow run."""
+    config = dict(experiment_config or {})
+    task_type = config.get("task_type")
     return {
         "experiment_id": experiment_id,
         "workspace_id": workspace_id,
@@ -77,4 +92,8 @@ def initial_workflow_state(
         "verification": {},
         "verification_passed": False,
         "fail_stage": fail_stage,
+        "config": config,
+        # Objective resolved from the request; every downstream stage reads it.
+        "primary_metric": resolve_primary_metric(config, task_type),
+        "compare_models": resolve_compare_models(config),
     }

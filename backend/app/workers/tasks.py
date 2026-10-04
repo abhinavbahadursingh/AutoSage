@@ -30,16 +30,12 @@ from celery import Task
 
 from app.core.config import settings
 from app.core.observability import (
-    TimingContext,
-    experiment_context,
     log_with_context,
     log_exception_with_context,
     set_experiment_id,
     clear_experiment_id,
-    get_experiment_id,
 )
 from app.models.experiment import Experiment, ExperimentStatus
-from app.models.ml_run import MLRun
 from app.services import experiment_service
 from app.workers.celery_app import celery_app
 
@@ -48,14 +44,7 @@ from app.services.event_publisher import (
     publish_experiment_started,
     publish_experiment_completed,
     publish_experiment_failed,
-    publish_ml_started,
-    publish_ml_completed,
 )
-# Phase 17: Reproducibility
-from app.services.reproducibility_service import ReproducibilityService
-
-import json
-from datetime import datetime
 
 logger = logging.getLogger("autosage.worker")
 
@@ -74,11 +63,24 @@ def _run_coro_sync(coro):  # type: ignore[no-untyped-def]
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(_await_and_dispose_engine(coro))
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(asyncio.run, _await_and_dispose_engine(coro)).result()
+
+
+async def _await_and_dispose_engine(coro):  # type: ignore[no-untyped-def]
+    """Await ``coro``, then dispose any DB engine bound to the current loop."""
+    try:
+        return await coro
+    finally:
+        try:
+            from app.db.session import dispose_engine_for_current_loop
+
+            await dispose_engine_for_current_loop()
+        except Exception:
+            pass
 
 
 def compute_retry_countdown(
@@ -93,12 +95,11 @@ def compute_retry_countdown(
 @asynccontextmanager
 async def task_session() -> AsyncIterator[Any]:
     """Fresh DB session for worker execution (monkeypatched in tests)."""
-    from app.db.session import AsyncSessionLocal, init_engine
+    from app.db import session as _db_session
 
-    if AsyncSessionLocal is None:
-        init_engine()
-    assert AsyncSessionLocal is not None
-    async with AsyncSessionLocal() as session:
+    _db_session.init_engine()  # idempotent per event loop; recreates if the loop changed
+    assert _db_session.AsyncSessionLocal is not None
+    async with _db_session.AsyncSessionLocal() as session:
         yield session
 
 
@@ -122,6 +123,7 @@ async def _run_workflow(experiment: Experiment) -> Dict[str, Any]:
         experiment_id=str(experiment.id),
         workspace_id=str(experiment.workspace_id),
         fail_stage=config.get("mock_fail_stage"),
+        experiment_config=config,
     )
 
 
@@ -187,178 +189,123 @@ async def _execute_async(task: Task, experiment_id: str) -> Dict[str, Any]:
                 config=experiment.config,
             )
 
-            # Phase 11: Create MLRun record and start MLflow run
-            mlflow_run_id = None
-            ml_run = None
+            # Execute the LangGraph experiment workflow (7-stage agent pipeline).
+            # Per-stage agent/ml/verification events are published from the
+            # graph node wrapper; this block syncs DB state to the final state.
             try:
-                from app.engine.mlflow.client import get_mlflow_tracker, mlflow_run_context
-
-                # Create MLRun record
-                ml_run = MLRun(
-                    experiment_id=UUID(experiment_id),
-                    name=experiment.name,
-                    status="RUNNING",
-                    params=experiment.config.get("model_params", {}),
-                    started_at=datetime.utcnow(),
-                )
-                session.add(ml_run)
-                await session.flush()  # Get the ID
-
-                # Start MLflow run
-                tracker = get_mlflow_tracker()
-                mlflow_run = None
-                with mlflow_run_context(
-                    tracker,
-                    run_name=f"autosage-{experiment.name[:50]}",
-                    tags={"autosage_experiment_id": str(experiment.id), "autosage_ml_run_id": str(ml_run.id)},
-                    autosage_experiment_id=UUID(str(experiment.id)),
-                ) as run:
-                    mlflow_run_id = run.info.run_id
-                    ml_run.mlflow_run_id = mlflow_run_id
-                    ml_run.status = "RUNNING"
-                    await session.commit()
-
-                    # Phase 15: Publish ml.started event
-                    publish_ml_started(
-                        experiment_id=UUID(experiment_id),
-                        model_family=experiment.config.get("model_family", "gradient_boosting"),
-                        model_params=experiment.config.get("model_params", {}),
-                        mlflow_run_id=mlflow_run_id,
-                        ml_run_id=str(ml_run.id),
-                    )
-
-                    # Execute sandbox with MLflow run ID
-                    from app.engine.sandbox.manager import get_sandbox_manager
-
-                    # Build training script from experiment config
-                    script = _build_training_script(experiment, mlflow_run_id)
-
-                    sandbox = get_sandbox_manager()
-                    with TimingContext("sandbox_execution", extra_fields={"experiment": experiment_id, "mlflow_run_id": mlflow_run_id}):
-                        result = await sandbox.execute_job(
-                            job_id=f"exp-{experiment_id}",
-                            script=script,
-                            dataset_path=experiment.config.get("dataset_path"),
-                            env_vars={
-                                "MODEL_FAMILY": experiment.config.get("model_family", "gradient_boosting"),
-                                "METRIC": experiment.config.get("metric", "accuracy"),
-                                "DATASET_NAME": experiment.config.get("dataset_name", "dataset.csv"),
-                                "MODEL_PARAMS": json.dumps(experiment.config.get("model_params", {})),
-                                "TARGET_COLUMN": experiment.config.get("target_column", "target"),
-                                "TASK_TYPE": experiment.config.get("task_type", "classification"),
-                            },
-                            mlflow_run_id=mlflow_run_id,
-                        )
-
-                    if result.success:
-                        ml_run.status = "COMPLETED"
-                        ml_run.metrics = result.metrics
-                        ml_run.params = experiment.config.get("model_params", {})
-                        ml_run.completed_at = datetime.utcnow()
-                        experiment.result_summary = {
-                            "ml_result": result.metrics,
-                            "mlflow_run_id": mlflow_run_id,
-                            "ml_run_id": str(ml_run.id),
-                            "stages_completed": ["ml_training"],
-                            "attempt": 1,
-                        }
-                        experiment = await experiment_service.transition_experiment(
-                            session, experiment, ExperimentStatus.COMPLETED.value
-                        )
-                        # Phase 17: Create reproducibility record
-                        try:
-                            reproducibility_service = ReproducibilityService(session)
-                            dataset = None
-                            if experiment.config.get("dataset_path"):
-                                from app.models.dataset import Dataset
-                                from sqlalchemy import select
-                                dataset_result = await session.execute(
-                                    select(Dataset).where(Dataset.storage_path == experiment.config["dataset_path"])
-                                )
-                                dataset = dataset_result.scalar_one_or_none()
-
-                            sandbox_result_data = {
-                                "artifact_uris": result.artifacts if hasattr(result, "artifacts") else None,
-                                "model_artifact_uri": result.model_artifact_uri if hasattr(result, "model_artifact_uri") else None,
-                                "log_artifact_uri": result.log_artifact_uri if hasattr(result, "log_artifact_uri") else None,
-                            }
-
-                            await reproducibility_service.create_record(
-                                experiment=experiment,
-                                ml_run=ml_run,
-                                dataset=dataset,
-                                sandbox_result=sandbox_result_data,
-                            )
-                            log_with_context(
-                                logger, logging.INFO, "reproducibility_record_created",
-                                experiment=experiment_id
-                            )
-                        except Exception as repro_exc:
-                            # Don't fail the experiment if reproducibility record creation fails
-                            log_with_context(
-                                logger, logging.WARNING, "reproducibility_record_failed",
-                                experiment=experiment_id, error=str(repro_exc)
-                            )
-
-                        # Phase 15: Publish ml.completed and experiment.completed events
-                        publish_ml_completed(
-                            experiment_id=UUID(experiment_id),
-                            success=True,
-                            metrics=result.metrics,
-                            mlflow_run_id=mlflow_run_id,
-                            ml_run_id=str(ml_run.id),
-                        )
-                        publish_experiment_completed(
-                            experiment_id=UUID(experiment_id),
-                            result_summary=experiment.result_summary,
-                            mlflow_run_id=mlflow_run_id,
-                            ml_run_id=str(ml_run.id),
-                        )
-                        log_with_context(
-                            logger, logging.INFO, "experiment_completed",
-                            experiment=experiment_id, mlflow_run_id=mlflow_run_id
-                        )
-                    else:
-                        ml_run.status = "FAILED"
-                        ml_run.notes = result.error_message
-                        ml_run.completed_at = datetime.utcnow()
-                        experiment.error_detail = result.error_message
-                        experiment = await experiment_service.transition_experiment(
-                            session, experiment, ExperimentStatus.FAILED.value
-                        )
-                        # Phase 15: Publish ml.completed (failed) and experiment.failed events
-                        publish_ml_completed(
-                            experiment_id=UUID(experiment_id),
-                            success=False,
-                            error=result.error_message,
-                            mlflow_run_id=mlflow_run_id,
-                            ml_run_id=str(ml_run.id),
-                        )
-                        publish_experiment_failed(
-                            experiment_id=UUID(experiment_id),
-                            error_detail=result.error_message,
-                            retry_count=experiment.retry_count or 0,
-                            max_retries=experiment.max_retries or 0,
-                            will_retry=(experiment.retry_count or 0) < (experiment.max_retries or 0),
-                        )
-                        log_with_context(
-                            logger, logging.ERROR, "experiment_failed_sandbox",
-                            experiment=experiment_id, error=result.error_message
-                        )
-
+                final_state = await _run_workflow(experiment)
             except Exception as exc:
-                if ml_run:
-                    ml_run.status = "FAILED"
-                    ml_run.notes = f"{type(exc).__name__}: {exc}"[:2000]
-                    ml_run.completed_at = datetime.utcnow()
-                    await session.commit()
                 return await _handle_workflow_error(task, session, experiment, exc)
+
+            _prev_history = (experiment.result_summary or {}).get("history")
+            ml_result = dict(final_state.get("ml_result") or {})
+            # Canonical result keys are always present, whatever the run did:
+            # primary_metric, primary_score, metrics, model_comparison,
+            # selected_model. Callers never have to guess the objective.
+            primary_metric = str(
+                final_state.get("primary_metric")
+                or ml_result.get("primary_metric")
+                or experiment.config.get("primary_metric")
+                or "accuracy"
+            )
+            primary_score = ml_result.get("primary_score")
+            selected_model = ml_result.get("selected_model")
+            if primary_score is None and selected_model:
+                # Legacy alias fallback, but only for a measured run: an
+                # unmeasured run must stay None rather than report 0.0.
+                primary_score = ml_result.get("value")
+            experiment.result_summary = {
+                "primary_metric": primary_metric,
+                "primary_score": primary_score,
+                "metrics": dict(ml_result.get("metrics") or {}),
+                "model_comparison": list(ml_result.get("model_comparison") or []),
+                "selected_model": selected_model,
+                "compare_models": bool(ml_result.get("compare_models")),
+                "baseline": dict(ml_result.get("baseline") or {}),
+                "stages_completed": list(final_state.get("stages_completed") or []),
+                "current_stage": final_state.get("current_stage"),
+                "status": final_state.get("status"),
+                "verification_passed": bool(final_state.get("verification_passed")),
+                "verification": final_state.get("verification") or {},
+                "ml_result": ml_result,
+                "model_spec": final_state.get("model_spec") or {},
+                "preprocessing_spec": final_state.get("preprocessing_spec") or {},
+                "dataset_info": final_state.get("dataset_info") or {},
+                "profile": final_state.get("profile") or {},
+                "attempt": final_state.get("attempt"),
+                "events": list(final_state.get("events") or [])[-20:],
+                "history": list(_prev_history or []),
+            }
+
+            # Persist the reasoning lineage (PipelineRun -> AgentExecution ->
+            # Decision -> EvidenceTrailNode) so the verification gate has
+            # decisions and evidence to verify. Best effort: never fails a run.
+            from app.services.evidence_persist import persist_workflow_evidence
+
+            evidence_result = await persist_workflow_evidence(experiment_id, final_state)
+            if evidence_result:
+                log_with_context(
+                    logger, logging.INFO, "experiment_evidence_persisted",
+                    experiment=experiment_id, evidence=str(evidence_result),
+                )
+
+            from app.core.runtime import record_execution
+
+            llm_sources = [
+                (final_state.get(slot) or {}).get("source")
+                for slot in ("ml_result", "verification", "model_spec", "preprocessing_spec", "dataset_info", "profile")
+            ]
+            used_llm = any(s == "llm" for s in llm_sources)
+            record_execution(
+                {
+                    "experiment_id": experiment_id,
+                    "status": experiment.status,
+                    "training_mode": "langgraph_workflow_llm" if used_llm else "langgraph_workflow_heuristic",
+                    "sandbox_used": False,
+                    "mlflow_used": False,
+                    "stages_completed": experiment.result_summary["stages_completed"],
+                    "attempt": experiment.result_summary.get("attempt"),
+                }
+            )
+
+            if final_state.get("status") == "FAILED":
+                experiment.error_detail = (
+                    f"{final_state.get('current_stage') or 'workflow'} stage failed — "
+                    f"verification retries exhausted"
+                )[:2000]
+                experiment = await experiment_service.transition_experiment(
+                    session, experiment, ExperimentStatus.FAILED.value
+                )
+                publish_experiment_failed(
+                    experiment_id=UUID(experiment_id),
+                    error_detail=experiment.error_detail,
+                    retry_count=experiment.retry_count or 0,
+                    max_retries=experiment.max_retries or 0,
+                    will_retry=False,
+                )
+                log_with_context(
+                    logger, logging.ERROR, "experiment_failed_workflow",
+                    experiment=experiment_id,
+                )
+            else:
+                experiment = await experiment_service.transition_experiment(
+                    session, experiment, ExperimentStatus.COMPLETED.value
+                )
+                publish_experiment_completed(
+                    experiment_id=UUID(experiment_id),
+                    result_summary=experiment.result_summary,
+                    mlflow_run_id=None,
+                    ml_run_id=None,
+                )
+                log_with_context(
+                    logger, logging.INFO, "experiment_completed",
+                    experiment=experiment_id,
+                )
 
             return {
                 "experiment_id": experiment_id,
                 "status": experiment.status,
-                "mlflow_run_id": mlflow_run_id,
-                "ml_run_id": str(ml_run.id) if ml_run else None,
+                "stages_completed": experiment.result_summary["stages_completed"],
             }
     finally:
         clear_experiment_id(exp_token)

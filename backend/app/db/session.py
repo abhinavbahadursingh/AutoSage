@@ -3,6 +3,7 @@
 The engine is created lazily via :func:`init_engine` (called from the
 application lifespan) so importing this module never opens connections.
 """
+import asyncio
 import logging
 import ssl
 from typing import AsyncIterator, Optional
@@ -22,6 +23,7 @@ logger = logging.getLogger("autosage")
 
 engine: Optional[AsyncEngine] = None
 AsyncSessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
+_loop_id: Optional[int] = None
 
 _NO_SSL = {"", "disable", "allow", "off", "false", "0"}
 # libpq sslmode values that enable TLS without certificate verification
@@ -76,10 +78,18 @@ def _split_ssl_connect_args(database_url: str) -> tuple[str, dict]:
     return database_url, connect_args
 
 
+def _current_loop_id() -> Optional[int]:
+    try:
+        return id(asyncio.get_running_loop())
+    except RuntimeError:
+        return None
+
+
 def init_engine(database_url: Optional[str] = None) -> AsyncEngine:
-    """Create the global async engine (idempotent)."""
-    global engine, AsyncSessionLocal
-    if engine is not None:
+    """Create the global async engine (idempotent per event loop)."""
+    global engine, AsyncSessionLocal, _loop_id
+    current_loop = _current_loop_id()
+    if engine is not None and _loop_id == current_loop:
         return engine
     url = database_url or settings.DATABASE_URL
     url, connect_args = _split_ssl_connect_args(url)
@@ -91,8 +101,17 @@ def init_engine(database_url: Optional[str] = None) -> AsyncEngine:
         max_overflow=settings.DATABASE_MAX_OVERFLOW,
         pool_timeout=settings.DATABASE_POOL_TIMEOUT,
         pool_pre_ping=True,
+        # Recycle connections periodically: the DB is remote (Supabase) and
+        # silently-dropped idle connections otherwise surface as hung
+        # checkouts that stall every DB-backed request (incl. WS auth).
+        # pool_pre_ping above transparently replaces any connection the
+        # server side dropped early, so the recycle window can stay long;
+        # each reconnect costs several high-latency round trips (dialect
+        # init alone is 3 queries).
+        pool_recycle=1800,
         connect_args=connect_args,
     )
+    _loop_id = current_loop
     AsyncSessionLocal = async_sessionmaker(
         bind=engine,
         class_=AsyncSession,
@@ -106,17 +125,26 @@ def init_engine(database_url: Optional[str] = None) -> AsyncEngine:
 
 async def close_engine() -> None:
     """Dispose the global engine (lifespan shutdown)."""
-    global engine, AsyncSessionLocal
+    global engine, AsyncSessionLocal, _loop_id
     if engine is not None:
-        await engine.dispose()
+        try:
+            await engine.dispose()
+        except Exception:
+            pass
         engine = None
         AsyncSessionLocal = None
+        _loop_id = None
         logger.info("database_engine_closed")
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency yielding an async session per request."""
-    if AsyncSessionLocal is None:
+    if AsyncSessionLocal is None or _loop_id != _current_loop_id():
+        if engine is not None:
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
         init_engine()
     assert AsyncSessionLocal is not None
     async with AsyncSessionLocal() as session:
@@ -126,9 +154,31 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             await session.close()
 
 
+async def dispose_engine_for_current_loop() -> None:
+    """Dispose the engine only if it was created for the currently running loop.
+
+    Used to clean up before ``asyncio.run`` closes its loop so that pooled
+    connections are never left tied to a closed event loop.
+    """
+    global engine, AsyncSessionLocal, _loop_id
+    if engine is not None and _loop_id is not None and _loop_id == _current_loop_id():
+        try:
+            await engine.dispose()
+        except Exception:
+            pass
+        engine = None
+        AsyncSessionLocal = None
+        _loop_id = None
+
+
 async def check_connection() -> bool:
     """Return True when a trivial query succeeds."""
-    if engine is None:
+    if engine is None or _loop_id != _current_loop_id():
+        if engine is not None:
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
         init_engine()
     assert engine is not None
     try:

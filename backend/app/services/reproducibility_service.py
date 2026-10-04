@@ -384,3 +384,31 @@ class ReproducibilityService:
 async def get_reproducibility_service(session: AsyncSession) -> ReproducibilityService:
     """FastAPI dependency for reproducibility service."""
     return ReproducibilityService(session)
+
+
+# Module-level wrappers (match the other service modules so endpoints
+# can call reproducibility_service.list_for_user(session, ...) directly).
+async def get_by_experiment(
+    session: AsyncSession, experiment_id: UUID, owner_id: UUID
+) -> Optional[ReproducibilityRecord]:
+    return await ReproducibilityService(session).get_by_experiment(
+        experiment_id, owner_id
+    )
+
+
+async def get_by_id(
+    session: AsyncSession, record_id: UUID, owner_id: UUID
+) -> Optional[ReproducibilityRecord]:
+    return await ReproducibilityService(session).get_by_id(record_id, owner_id)
+
+
+async def list_for_user(
+    session: AsyncSession,
+    owner_id: UUID,
+    workspace_id: Optional[UUID] = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[List[ReproducibilityRecord], int]:
+    return await ReproducibilityService(session).list_for_user(
+        owner_id, workspace_id=workspace_id, page=page, page_size=page_size
+    )

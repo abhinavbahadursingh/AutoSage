@@ -12,16 +12,19 @@ function agentStages(agentName: string, nodes: AgentNode[]) {
 }
 
 export function AgentsPage() {
-  const { activeExperiment } = useStore()
-  const [selected, setSelected] = useState(AGENT_ROSTER[1].name)
+  const { activeExperiment, authError } = useStore()
+  const [selected, setSelected] = useState(AGENT_ROSTER[1]?.name ?? AGENT_ROSTER[0]?.name ?? '')
 
   const rows = useMemo(
     () =>
       AGENT_ROSTER.map((a) => {
-        const stages = agentStages(a.name, activeExperiment.nodes)
+        const stages = agentStages(a.name, activeExperiment?.nodes ?? [])
         const done = stages.filter((s) => s.state === 'done')
         const active = stages.find((s) => s.state === 'active')
-        const conf = done.length ? done.reduce((sum, s) => sum + s.confidence, 0) / done.length : null
+        const confidences = done.map((s) => s.confidence).filter((c): c is number => c !== null)
+        const conf = confidences.length
+          ? confidences.reduce((sum, c) => sum + c, 0) / confidences.length
+          : null
         const ms = done.reduce((sum, s) => sum + (s.elapsedMs ?? 0), 0)
         const tools = done.reduce((sum, s) => sum + s.tools.length, 0)
         return {
@@ -39,18 +42,18 @@ export function AgentsPage() {
   )
 
   const current = rows.find((r) => r.name === selected) ?? rows[0]
-  const currentNodes = current.stages
+  const currentNodes = current?.stages ?? []
 
   return (
     <div className="flex h-full min-w-0 flex-col">
       <PageHeader
         title="Agents"
-        subtitle="The eight autonomous workers assigned to every task graph. Status reflects the currently open experiment."
+        subtitle="Workers assigned to the current task graph. Status reflects the currently open experiment."
         right={
           <div className="mono hidden text-right text-[13px] leading-relaxed text-paper-500 md:block">
-            8 agents available
+            {rows.length} agents in roster
             <br />
-            verification engine online
+            {activeExperiment ? `exp: ${activeExperiment.id.slice(0, 8)}…` : authError ?? 'no experiment open'}
           </div>
         }
       />
@@ -124,9 +127,7 @@ export function AgentsPage() {
                   <td className="mono tnum px-3 py-2.5 text-right text-[14px] text-paper-200">
                     {r.conf !== null ? r.conf.toFixed(2) : '—'}
                   </td>
-                  <td className="mono tnum px-3 py-2.5 text-right text-[14px] text-paper-300">
-                    {r.tools || '—'}
-                  </td>
+                  <td className="mono tnum px-3 py-2.5 text-right text-[14px] text-paper-300">{r.tools || '—'}</td>
                   <td className="mono tnum px-4 py-2.5 text-right text-[13.5px] text-paper-400">
                     {r.ms ? fmtMs(r.ms) : '—'}
                   </td>
@@ -138,16 +139,16 @@ export function AgentsPage() {
 
         <aside className="hidden w-[320px] shrink-0 overflow-y-auto border-l border-ink-600 bg-ink-900 xl:block">
           <div className="border-b border-ink-600 px-4 py-3">
-            <h2 className="text-[16px] font-semibold text-paper-50">{current.name}</h2>
-            <div className="mono mt-0.5 text-[12.5px] text-paper-500">{current.role}</div>
+            <h2 className="text-[16px] font-semibold text-paper-50">{current?.name ?? '—'}</h2>
+            <div className="mono mt-0.5 text-[12.5px] text-paper-500">{current?.role ?? '—'}</div>
           </div>
 
           <div className="border-b border-ink-700 px-4 py-1">
-            <KeyVal k="experiment" v={activeExperiment.id} />
-            <KeyVal k="stages owned" v={String(current.stages.length)} />
-            <KeyVal k="avg confidence" v={current.conf !== null ? current.conf.toFixed(2) : '—'} />
-            <KeyVal k="tools called" v={String(current.tools)} />
-            <KeyVal k="cpu time" v={current.ms ? fmtMs(current.ms) : '—'} />
+            <KeyVal k="experiment" v={activeExperiment?.id.slice(0, 8) ?? '—'} />
+            <KeyVal k="stages owned" v={String(currentNodes.length)} />
+            <KeyVal k="avg confidence" v={current?.conf != null ? current.conf.toFixed(2) : '—'} />
+            <KeyVal k="tools called" v={String(current?.tools ?? 0)} />
+            <KeyVal k="cpu time" v={current?.ms ? fmtMs(current.ms) : '—'} />
           </div>
 
           <div className="px-4 py-3">
@@ -173,7 +174,7 @@ export function AgentsPage() {
                         {n.state === 'idle' ? n.idleAction : n.action}
                       </p>
                       <div className="mono mt-1.5 text-[12.5px] text-paper-500">
-                        conf {n.confidence.toFixed(2)} · {n.tools.length} tools
+                        conf {n.confidence !== null ? n.confidence.toFixed(2) : '—'} · {n.tools.length} tools
                         {n.elapsedMs ? ` · ${fmtMs(n.elapsedMs)}` : ''}
                       </div>
                     </li>

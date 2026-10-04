@@ -1,0 +1,25 @@
+{"timestamp": "2026-10-04T11:35:30.314622+00:00", "level": "INFO", "logger": "autosage.observability", "message": "opentelemetry_initialized_no_exporter"}
+{"timestamp": "2026-10-04T11:35:30.320334+00:00", "level": "INFO", "logger": "autosage.observability", "message": "opentelemetry_libraries_instrumented"}
+{"timestamp": "2026-10-04T11:35:30.426665+00:00", "level": "INFO", "logger": "autosage.observability", "message": "fastapi_instrumented"}
+{"timestamp": "2026-10-04T11:35:30.428812+00:00", "level": "INFO", "logger": "autosage", "message": "startup", "extra": {"service": "autosage-backend", "version": "0.1.0", "env": "development"}}
+{"timestamp": "2026-10-04T11:35:30.464957+00:00", "level": "INFO", "logger": "autosage", "message": "database_engine_initialized"}
+ 
+ -------------- celery@AbhinavSingh v5.6.3 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-10-10.0.26200-SP0 2026-10-04 17:05:30
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         autosage_worker:0x25d64f83dd0
+- ** ---------- .> transport:   sqla+sqlite:///D:/autoSage/data/celery_broker.db
+- ** ---------- .> results:     sqlite:///D:/autoSage/data/celery_results.db
+- *** --- * --- .> concurrency: 2 (solo)
+-- ******* ---- .> task events: ON
+--- ***** ----- 
+ -------------- [queues]
+                .> experiments      exchange=experiments(direct) key=experiments
+                
+
+[tasks]
+  . experiments.run_experiment
+  . tasks.execute_pipeline_run
+

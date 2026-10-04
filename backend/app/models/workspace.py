@@ -34,21 +34,18 @@ class Workspace(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    owner = relationship("User", back_populates="workspaces", lazy="selectin")
+    owner = relationship("User", back_populates="workspaces")
     experiments = relationship(
         "Experiment",
         back_populates="workspace",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )
     datasets = relationship(
         "Dataset",
         back_populates="workspace",
-        lazy="selectin",
     )
     files = relationship(
-        "FileMetadata", back_populates="workspace", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "FileMetadata", back_populates="workspace", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Workspace id={self.id} name={self.name!r}>"

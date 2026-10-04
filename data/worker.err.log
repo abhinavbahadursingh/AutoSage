@@ -1,0 +1,124 @@
+[2026-10-03 13:00:04,649: INFO/MainProcess] Connected to sqla+sqlite:///D:/autoSage/data/celery_broker.db
+[2026-10-03 13:00:04,657: INFO/MainProcess] celery@AbhinavSingh ready.
+[2026-10-03 13:12:48,464: INFO/MainProcess] Task experiments.run_experiment[9338fd1d-4083-4ead-801e-da70b30989b4] received
+[2026-10-03 13:12:48,464: INFO/MainProcess] task_started
+[2026-10-03 13:12:48,570: INFO/MainProcess] database_engine_initialized
+[2026-10-03 13:13:00,703: WARNING/MainProcess] D:\autoSage\backend\.venv\Lib\site-packages\pydantic\main.py:542: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `dict[str, any]` - serialized value may not be as expected [field_name='payload', input_value=ExperimentStartedPayload(...tion_metric': 'recall'}), input_type=ExperimentStartedPayload])
+  return self.__pydantic_serializer__.to_json(
+
+[2026-10-03 13:13:06,150: WARNING/MainProcess] 2026/10/03 13:13:06 INFO mlflow.agent.hint: Load the `instrumenting-with-mlflow-tracing` skill at D:\autoSage\backend\.venv\Lib\site-packages\mlflow\assistant\skills\instrumenting-with-mlflow-tracing\SKILL.md before writing any tracing code; it ships with this MLflow install. Set MLFLOW_DISABLE_AGENT_HINT=1 to silence this.
+[2026-10-03 13:13:06,951: INFO/MainProcess] workflow_execution_start
+[2026-10-03 13:13:06,952: INFO/MainProcess] workflow_start
+[2026-10-03 13:13:06,959: INFO/MainProcess] workflow_node.orchestrator_start
+[2026-10-03 13:13:06,960: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:08,971: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:08,973: INFO/MainProcess] database_engine_initialized
+[2026-10-03 13:13:08,974: WARNING/MainProcess] tool_failed
+[2026-10-03 13:13:08,974: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:08,974: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:10,985: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:10,986: INFO/MainProcess] workflow_node.orchestrator_completed
+[2026-10-03 13:13:10,987: INFO/MainProcess] workflow_node.discovery_start
+[2026-10-03 13:13:10,988: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:12,998: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:13,001: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:13,406: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:13,407: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:13,407: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:13,446: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:13,446: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:13,446: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:13,447: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:13,447: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:13,447: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:13,447: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:15,456: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:15,456: INFO/MainProcess] workflow_node.discovery_completed
+[2026-10-03 13:13:15,457: INFO/MainProcess] workflow_node.profiler_start
+[2026-10-03 13:13:15,457: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:17,472: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:17,474: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:17,731: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:17,733: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:17,733: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:17,735: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:17,735: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:17,736: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:17,736: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:17,737: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:17,737: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:19,747: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:19,748: INFO/MainProcess] workflow_node.profiler_completed
+[2026-10-03 13:13:19,748: INFO/MainProcess] workflow_node.preprocessor_start
+[2026-10-03 13:13:19,749: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:21,757: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:21,759: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:22,040: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:22,041: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:22,041: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:22,043: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:22,044: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:22,044: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:22,044: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:22,044: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:22,045: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:24,051: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:24,052: INFO/MainProcess] workflow_node.preprocessor_completed
+[2026-10-03 13:13:24,052: INFO/MainProcess] workflow_node.model_selector_start
+[2026-10-03 13:13:24,053: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:26,059: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:26,061: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:26,481: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:26,482: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:26,482: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:26,485: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:26,485: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:26,485: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:28,490: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:28,491: INFO/MainProcess] workflow_node.model_selector_completed
+[2026-10-03 13:13:28,492: INFO/MainProcess] workflow_node.ml_experiment_start
+[2026-10-03 13:13:28,492: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:32,510: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:32,512: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:32,904: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:32,906: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:32,906: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:32,906: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:32,906: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:32,906: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:32,906: INFO/MainProcess] sandbox_execute_job_start
+[2026-10-03 13:13:32,906: INFO/MainProcess] sandbox_build_image_start
+[2026-10-03 13:13:32,906: ERROR/MainProcess] sandbox_build_image_failed
+[2026-10-03 13:13:32,906: ERROR/MainProcess] sandbox_job_error
+[2026-10-03 13:13:32,906: INFO/MainProcess] sandbox_execute_job_completed
+[2026-10-03 13:13:32,906: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:32,914: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:32,914: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:36,928: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:36,929: INFO/MainProcess] workflow_node.ml_experiment_completed
+[2026-10-03 13:13:36,929: INFO/MainProcess] workflow_node.verification_start
+[2026-10-03 13:13:36,929: INFO/MainProcess] workflow_node_start
+[2026-10-03 13:13:38,939: INFO/MainProcess] agent_llm_call_start
+[2026-10-03 13:13:38,939: INFO/MainProcess] llm_completion_start
+[2026-10-03 13:13:39,195: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 404 Not Found"
+[2026-10-03 13:13:39,195: WARNING/MainProcess] llm_provider_failed
+[2026-10-03 13:13:39,199: INFO/MainProcess] llm_completion_completed
+[2026-10-03 13:13:39,201: ERROR/MainProcess] agent_llm_call_failed
+[2026-10-03 13:13:39,201: WARNING/MainProcess] agent_llm_fallback
+[2026-10-03 13:13:39,201: INFO/MainProcess] tool_execution_start
+[2026-10-03 13:13:39,201: INFO/MainProcess] tool_ok
+[2026-10-03 13:13:39,201: INFO/MainProcess] tool_execution_completed
+[2026-10-03 13:13:39,201: INFO/MainProcess] workflow_stage
+[2026-10-03 13:13:43,204: INFO/MainProcess] workflow_node_complete
+[2026-10-03 13:13:43,205: INFO/MainProcess] workflow_node.verification_completed
+[2026-10-03 13:13:43,206: INFO/MainProcess] workflow_done
+[2026-10-03 13:13:43,206: INFO/MainProcess] workflow_execution_completed
+[2026-10-03 13:13:48,436: INFO/MainProcess] experiment_completed
+[2026-10-03 13:13:48,829: INFO/MainProcess] Task experiments.run_experiment[9338fd1d-4083-4ead-801e-da70b30989b4] succeeded in 60.375s: {'experiment_id': '758110db-f840-4ddc-ac9e-6dcc35e19a17', 'status': 'COMPLETED', 'stages_completed': ['orchestrator', 'discovery', 'profiler', 'preprocessor', 'model_selector', 'ml_experiment', 'verification']}
+[2026-10-03 13:13:48,829: INFO/MainProcess] task_completed

@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     auth, health, projects, datasets, runs, evidence,
     memory, experiments, workspaces, verification, storage, reproducibility,
-    websocket,
+    websocket, diagnostics, llm, sandbox,
 )
 
 api_router = APIRouter()
@@ -21,3 +21,6 @@ api_router.include_router(verification.router, tags=["Verification"])
 api_router.include_router(storage.router, prefix="/storage", tags=["Storage"])
 api_router.include_router(reproducibility.router, tags=["Reproducibility"])
 api_router.include_router(websocket.router, tags=["WebSocket"])
+api_router.include_router(diagnostics.router, tags=["Diagnostics"])
+api_router.include_router(llm.router, prefix="/llm", tags=["LLM"])
+api_router.include_router(sandbox.router, prefix="/sandbox", tags=["Sandbox"])

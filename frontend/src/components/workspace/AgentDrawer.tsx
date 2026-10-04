@@ -3,8 +3,8 @@ import { X } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { statusTone } from '../../lib/tones'
 import { fmtMs } from '../../lib/format'
-import { STAGE_META } from '../../data/experiments'
-import type { AgentNode, Experiment, ExperimentResult } from '../../lib/types'
+import { STAGE_META, formatApiDate } from '../../data/experiments'
+import type { AgentNode, Experiment } from '../../lib/types'
 
 type Tab = 'reasoning' | 'evidence' | 'tools' | 'analysis'
 
@@ -24,19 +24,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function confusion(result?: ExperimentResult) {
-  if (!result) return null
-  const recall = result.metrics.find((m) => m.name === 'Recall')?.value ?? 0.86
-  const precision = result.metrics.find((m) => m.name === 'Precision')?.value ?? 0.62
-  const P = 560
-  const N = 1553
-  const tp = Math.round(recall * P)
-  const fn = P - tp
-  const fp = Math.max(0, Math.round(tp / precision) - tp)
-  const tn = Math.max(0, N - fp)
-  return { tp, fn, fp, tn }
-}
-
 export function AgentDrawer({
   experiment,
   node,
@@ -49,13 +36,13 @@ export function AgentDrawer({
   const [tabState, setTabState] = useState<{ id: string; tab: Tab }>({ id: '', tab: 'reasoning' })
   const tab: Tab = tabState.id === (node?.id ?? '') ? tabState.tab : 'reasoning'
   const setTab = (t: Tab) => setTabState({ id: node?.id ?? '', tab: t })
-  const result = experiment.result
-  const matrix = useMemo(() => confusion(result), [result])
+
   const stageLogs = useMemo(
     () => (node ? experiment.logs.filter((l) => l.agent === node.agent).slice(-40) : []),
     [experiment.logs, node],
   )
-  const maxImp = result ? Math.max(...result.featureImportance.map((f) => f.importance)) : 1
+  const metrics = experiment.metrics
+  const maxMetric = metrics.length ? Math.max(...metrics.map((m) => Math.abs(m.value) || 0), 1e-9) : 1
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -84,7 +71,9 @@ export function AgentDrawer({
                     ? 'animate-pulse bg-accent-400'
                     : node.state === 'done'
                       ? 'bg-verify-500'
-                      : 'bg-ink-500'
+                      : node.state === 'failed'
+                        ? 'bg-conflict-500'
+                        : 'bg-ink-500'
                 }`}
               />
             </div>
@@ -108,9 +97,7 @@ export function AgentDrawer({
               key={t.id}
               onClick={() => setTab(t.id)}
               className={`relative -mb-px border-b-2 px-3 py-2.5 text-[14px] font-medium transition-colors ${
-                tab === t.id
-                  ? 'border-accent-400 text-paper-50'
-                  : 'border-transparent text-paper-500 hover:text-paper-200'
+                tab === t.id ? 'border-accent-400 text-paper-50' : 'border-transparent text-paper-500 hover:text-paper-200'
               }`}
             >
               {t.label}
@@ -133,15 +120,23 @@ export function AgentDrawer({
               </Field>
               <Field label="Decision &amp; reasoning">
                 <p className="text-[16px] leading-relaxed text-paper-200">{node.decision}</p>
-                <div className="mt-4">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[13.5px] text-paper-400">confidence</span>
-                    <span className="mono text-[15px] text-accent-300">{node.confidence.toFixed(2)}</span>
+                {node.confidence !== null && (
+                  <div className="mt-4">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13.5px] text-paper-400">confidence</span>
+                      <span className="mono text-[15px]">
+                        {node.confidence.toFixed(2)}{' '}{'('}{node.verification_abstained ? 'abstained' : ''}{')'}
+                      </span>
+                    </div>
+                    <div className="h-[3px] overflow-hidden rounded-full bg-ink-700">
+                      <div className="anim-bar h-full"
+  style={{
+    width: `${node.confidence * 100}%`,
+    background: node.verification_abstained ? 'bg-dim-500' : 'bg-accent-500',
+  }} />
+                    </div>
                   </div>
-                  <div className="h-[3px] overflow-hidden rounded-full bg-ink-700">
-                    <div className="anim-bar h-full bg-accent-500" style={{ width: `${node.confidence * 100}%` }} />
-                  </div>
-                </div>
+                )}
               </Field>
             </>
           )}
@@ -153,38 +148,44 @@ export function AgentDrawer({
                   <div className="flex items-center gap-2">
                     <Badge tone={statusTone(node.verification.status)}>{node.verification.status}</Badge>
                     <span className="mono text-[13px] text-paper-500">
-                      {experiment.id}/{node.id}
+                      {experiment.id.slice(0, 8)}/{node.id}
                     </span>
                   </div>
                   <p className="mt-2 text-[15px] leading-relaxed text-paper-300">{node.verification.note}</p>
                 </div>
               </Field>
               <Field label={`Evidence used · ${node.evidence.length}`}>
-                <ul className="flex flex-col gap-1.5">
-                  {node.evidence.map((e) => (
-                    <li
-                      key={e}
-                      className="mono flex items-start gap-2 rounded-sm border border-ink-700 bg-ink-850 px-2.5 py-1.5 text-[13.5px] leading-snug break-all text-paper-300"
-                    >
-                      <span className="mt-[5px] h-1 w-1 shrink-0 rounded-full bg-verify-500" />
-                      {e}
-                    </li>
-                  ))}
-                </ul>
+                {node.evidence.length === 0 ? (
+                  <p className="text-[15px] text-paper-500">
+                    No evidence artifacts reported by the backend for this stage yet.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-1.5">
+                    {node.evidence.map((e) => (
+                      <li
+                        key={e}
+                        className="mono flex items-start gap-2 rounded-sm border border-ink-700 bg-ink-850 px-2.5 py-1.5 text-[13.5px] leading-snug break-all text-paper-300"
+                      >
+                        <span className="mt-[5px] h-1 w-1 shrink-0 rounded-full bg-verify-500" />
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </Field>
               <Field label="Audit">
                 <div className="flex flex-col gap-2 text-[14px] text-paper-400">
                   <div className="flex justify-between gap-3">
                     <span>recorded</span>
-                    <span className="mono text-paper-200">{experiment.createdAt}</span>
+                    <span className="mono text-paper-200">{formatApiDate(experiment.createdAt)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span>verification level</span>
                     <span className="mono text-paper-200">{experiment.verificationLevel}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span>bundle</span>
-                    <span className="mono text-paper-200">evidence.bundle#{node.id}</span>
+                    <span>experiment status</span>
+                    <span className="mono text-paper-200">{experiment.status}</span>
                   </div>
                 </div>
               </Field>
@@ -194,26 +195,26 @@ export function AgentDrawer({
           {tab === 'tools' && (
             <>
               <Field label="Tool calls">
-                <div className="overflow-hidden rounded-sm border border-ink-700">
-                  {node.tools.map((t, i) => (
-                    <div
-                      key={t.name}
-                      className={`flex items-center gap-3 px-3 py-2 ${i % 2 ? 'bg-ink-850' : 'bg-ink-800/50'}`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="mono truncate text-[14px] text-paper-100">{t.name}</div>
-                        <div className="mono truncate text-[13px] text-paper-500">{t.args}</div>
+                {node.tools.length === 0 ? (
+                  <p className="text-[15px] text-paper-500">
+                    Tool-call telemetry is not exposed by the backend API for this stage.
+                  </p>
+                ) : (
+                  <div className="overflow-hidden rounded-sm border border-ink-700">
+                    {node.tools.map((t, i) => (
+                      <div
+                        key={`${t.name}-${i}`}
+                        className={`flex items-center gap-3 px-3 py-2 ${i % 2 ? 'bg-ink-850' : 'bg-ink-800/50'}`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="mono truncate text-[14px] text-paper-100">{t.name}</div>
+                          <div className="mono truncate text-[13px] text-paper-500">{t.args}</div>
+                        </div>
+                        <span className="mono tnum shrink-0 text-[13px] text-accent-300/90">{fmtMs(t.ms)}</span>
                       </div>
-                      <span className="mono tnum shrink-0 text-[13px] text-accent-300/90">{fmtMs(t.ms)}</span>
-                    </div>
-                  ))}
-                  <div className="flex justify-between border-t border-ink-700 bg-ink-850 px-3 py-1.5">
-                    <span className="text-[13px] text-paper-500">{node.tools.length} calls</span>
-                    <span className="mono text-[13px] text-paper-300">
-                      {fmtMs(node.tools.reduce((a, t) => a + t.ms, 0))} total
-                    </span>
+                    ))}
                   </div>
-                </div>
+                )}
               </Field>
               <Field label={`Stage logs · ${stageLogs.length}`}>
                 {stageLogs.length === 0 ? (
@@ -229,7 +230,7 @@ export function AgentDrawer({
                               ? 'text-verify-500'
                               : l.level === 'WARN'
                                 ? 'text-warn-500'
-                                : l.level === 'DECISION'
+                                : l.level === 'DECISION' || l.level === 'METRIC'
                                   ? 'text-accent-300'
                                   : 'text-paper-500'
                           }`}
@@ -247,88 +248,45 @@ export function AgentDrawer({
 
           {tab === 'analysis' && (
             <>
-              {!result ? (
+              {metrics.length === 0 ? (
                 <div className="px-5 py-10 text-center">
                   <p className="text-[16px] text-paper-300">Analysis appears after the run completes.</p>
                   <p className="mt-2 text-[15px] leading-relaxed text-paper-500">
-                    Feature importance, cross-validation detail and the confusion matrix are computed during
-                    evaluation and released here once verified.
+                    Metrics are read from <span className="mono">result_summary.ml_result</span> when the backend
+                    finishes training.
                   </p>
                 </div>
               ) : (
                 <>
-                  <Field label="Confusion matrix · holdout">
-                    {matrix && (
-                      <div className="inline-grid grid-cols-2 gap-px overflow-hidden rounded-sm border border-ink-700 bg-ink-700 text-center">
-                        {[
-                          { k: 'TP', v: matrix.tp, tone: 'text-verify-500' },
-                          { k: 'FN', v: matrix.fn, tone: 'text-warn-500' },
-                          { k: 'FP', v: matrix.fp, tone: 'text-warn-500' },
-                          { k: 'TN', v: matrix.tn, tone: 'text-paper-100' },
-                        ].map((c) => (
-                          <div key={c.k} className="bg-ink-900 px-5 py-3">
-                            <div className="mono text-[12px] tracking-[0.1em] text-paper-500">{c.k}</div>
-                            <div className={`mono tnum mt-1 text-[20.5px] ${c.tone}`}>{c.v.toLocaleString()}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <p className="mt-2 text-[13.5px] text-paper-500">n = 2,113 · threshold 0.42 (precision ≥ 0.60)</p>
-                  </Field>
-
-                  <Field label="Cross-validation · 5-fold stratified">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="text-[12px] tracking-[0.08em] text-paper-500 uppercase">
-                          <th className="pb-1.5 font-semibold">fold</th>
-                          <th className="pb-1.5 font-semibold">recall</th>
-                          <th className="pb-1.5 font-semibold">auc</th>
-                          <th className="pb-1.5 text-right font-semibold">fit</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-ink-700/70">
-                        {result.folds.map((f) => (
-                          <tr key={f.fold}>
-                            <td className="mono py-1.5 text-[14px] text-paper-300">{f.fold}</td>
-                            <td className="mono tnum py-1.5 text-[14px] text-paper-100">{f.metric.toFixed(3)}</td>
-                            <td className="mono tnum py-1.5 text-[14px] text-paper-300">{f.auc.toFixed(3)}</td>
-                            <td className="mono tnum py-1.5 text-right text-[14px] text-paper-400">{f.fitSec}s</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </Field>
-
-                  <Field label="Feature importance · top 8">
-                    <ul className="flex flex-col gap-2">
-                      {result.featureImportance.slice(0, 8).map((f) => (
-                        <li key={f.feature} className="flex items-center gap-3">
-                          <span className="mono w-[150px] shrink-0 truncate text-[13.5px] text-paper-300" title={f.feature}>
-                            {f.feature}
-                          </span>
-                          <span className="h-[6px] flex-1 overflow-hidden rounded-[2px] bg-ink-800">
-                            <span
-                              className={`anim-bar block h-full ${f.direction === 'positive' ? 'bg-accent-500' : 'bg-paper-400/60'}`}
-                              style={{ width: `${(f.importance / maxImp) * 100}%` }}
-                            />
-                          </span>
-                          <span className="mono tnum w-[40px] shrink-0 text-right text-[13px] text-paper-400">
-                            {f.importance.toFixed(3)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </Field>
-
-                  <Field label="Metrics">
+                  <Field label="Metrics (backend ml_result)">
                     <div className="grid grid-cols-3 gap-px overflow-hidden rounded-sm border border-ink-700 bg-ink-700">
-                      {result.metrics.slice(0, 3).map((m) => (
+                      {metrics.slice(0, 3).map((m) => (
                         <div key={m.name} className="bg-ink-900 px-3 py-2.5 text-center">
                           <div className="mono text-[12px] tracking-[0.08em] text-paper-500 uppercase">{m.name}</div>
                           <div className="mono tnum mt-1 text-[19.5px] text-paper-50">{m.value.toFixed(3)}</div>
                         </div>
                       ))}
                     </div>
+                  </Field>
+                  <Field label="All reported metrics">
+                    <ul className="flex flex-col gap-2">
+                      {metrics.map((m) => (
+                        <li key={m.name} className="flex items-center gap-3">
+                          <span className="mono w-[150px] shrink-0 truncate text-[13.5px] text-paper-300" title={m.name}>
+                            {m.name}
+                          </span>
+                          <span className="h-[6px] flex-1 overflow-hidden rounded-[2px] bg-ink-800">
+                            <span
+                              className="anim-bar block h-full bg-accent-500"
+                              style={{ width: `${(Math.abs(m.value) / maxMetric) * 100}%` }}
+                            />
+                          </span>
+                          <span className="mono tnum w-[50px] shrink-0 text-right text-[13px] text-paper-400">
+                            {m.value.toFixed(3)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </Field>
                 </>
               )}

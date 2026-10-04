@@ -25,6 +25,11 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    # Task modules to import in worker processes. Without this, `celery -A
+    # app.workers.celery_app worker` registers zero tasks and every delivery
+    # fails with `KeyError: 'experiments.run_experiment'`. (Eager mode masked
+    # this because the publisher imports app.workers.tasks before apply_async.)
+    include=["app.workers.tasks"],
     # Serialization
     task_serializer="json",
     result_serializer="json",

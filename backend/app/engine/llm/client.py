@@ -64,16 +64,29 @@ def build_default_providers() -> Dict[str, BaseLLMProvider]:
     }
 
 
+async def _await_and_dispose_engine(coro):  # type: ignore[no-untyped-def]
+    """Await ``coro``, then dispose any DB engine bound to the current loop."""
+    try:
+        return await coro
+    finally:
+        try:
+            from app.db.session import dispose_engine_for_current_loop
+
+            await dispose_engine_for_current_loop()
+        except Exception:
+            pass
+
+
 def run_coro_sync(coro):  # type: ignore[no-untyped-def]
     """Drive a coroutine from sync code (handles a pre-existing event loop)."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(_await_and_dispose_engine(coro))
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(asyncio.run, _await_and_dispose_engine(coro)).result()
 
 
 def extract_json(text: str) -> dict:

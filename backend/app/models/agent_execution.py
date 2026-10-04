@@ -48,12 +48,10 @@ class AgentExecution(Base):
     )
 
     experiment = relationship(
-        "Experiment", back_populates="agent_executions", lazy="selectin"
-    )
-    pipeline = relationship("Pipeline", back_populates="agent_executions", lazy="selectin")
+        "Experiment", back_populates="agent_executions")
+    pipeline = relationship("Pipeline", back_populates="agent_executions")
     decisions = relationship(
-        "Decision", back_populates="agent_execution", lazy="selectin"
-    )
+        "Decision", back_populates="agent_execution")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<AgentExecution id={self.id} agent={self.agent_name!r} status={self.status!r}>"

@@ -17,6 +17,8 @@ from app.core.observability import instrument_all, instrument_fastapi
 from app.core.ratelimit import RateLimitMiddleware, get_rate_limiter
 from app.db.session import check_connection, close_engine, init_engine
 from app.services import close_connection_manager
+from app.services.event_publisher import set_main_event_loop
+from app.services.websocket_manager import start_event_bridge, stop_event_bridge
 
 logger = setup_logging(settings.LOG_LEVEL)
 
@@ -65,6 +67,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         extra={"service": "autosage-backend", "version": __version__, "env": settings.APP_ENV},
     )
     init_engine()
+    set_main_event_loop(asyncio.get_running_loop())
+    # Embedded Celery worker: executes queued experiment tasks inside this
+    # process (dev default) so WS events broadcast locally without Redis.
+    embedded_worker = _start_embedded_worker()
+    # Cross-process WS event bridge (Redis pub/sub -> local broadcast).
+    # No-op when Redis is down; never blocks startup.
+    await start_event_bridge()
     # Never block startup on a slow/unreachable DB: a hung probe used to leave
     # uvicorn accepting TCP but serving no HTTP (frontend "Cannot reach API").
     try:
@@ -81,9 +90,65 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Stay up so /health can report "degraded" instead of crashing.
         logger.warning("postgres_unreachable_on_startup")
     yield
+    await stop_event_bridge()
+    _stop_embedded_worker(embedded_worker)
+    set_main_event_loop(None)
     await close_connection_manager()
     await close_engine()
     logger.info("shutdown")
+
+
+def _start_embedded_worker():
+    """Run a Celery worker for the experiments queue inside a daemon thread."""
+    if not settings.CELERY_EMBEDDED_WORKER:
+        from app.core.runtime import set_embedded_worker
+
+        set_embedded_worker(enabled=False, running=False)
+        return None
+    try:
+        import threading
+
+        from app.core.runtime import set_embedded_worker
+        from app.workers.celery_app import celery_app
+
+        worker = celery_app.Worker(
+            queues=[settings.CELERY_EXPERIMENT_QUEUE],
+            pool=settings.CELERY_EMBEDDED_WORKER_POOL,
+            concurrency=settings.CELERY_EMBEDDED_WORKER_CONCURRENCY,
+            loglevel="INFO",
+        )
+        thread = threading.Thread(target=worker.start, name="celery-embedded-worker", daemon=True)
+        thread.start()
+        logger.info(
+            "embedded_worker_started",
+            extra={"queue": settings.CELERY_EXPERIMENT_QUEUE, "pool": settings.CELERY_EMBEDDED_WORKER_POOL},
+        )
+        set_embedded_worker(
+            enabled=True,
+            running=True,
+            queue=settings.CELERY_EXPERIMENT_QUEUE,
+            pool=settings.CELERY_EMBEDDED_WORKER_POOL,
+            concurrency=settings.CELERY_EMBEDDED_WORKER_CONCURRENCY,
+        )
+        return worker
+    except Exception as exc:
+        logger.exception("embedded_worker_start_failed")
+        set_embedded_worker(
+            enabled=settings.CELERY_EMBEDDED_WORKER, running=False, error=str(exc)
+        )
+        return None
+
+
+def _stop_embedded_worker(worker) -> None:
+    if worker is None:
+        return
+    try:
+        worker.close()
+    except Exception:
+        pass
+    from app.core.runtime import set_embedded_worker
+
+    set_embedded_worker(enabled=settings.CELERY_EMBEDDED_WORKER, running=False)
 
 
 def create_application() -> FastAPI:
@@ -133,7 +198,6 @@ def create_application() -> FastAPI:
         expose_headers=["X-Request-ID"],
         max_age=600,
     )
-
     register_exception_handlers(app)
     app.include_router(api_router, prefix="/api/v1")
 

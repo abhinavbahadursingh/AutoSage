@@ -21,6 +21,7 @@ from app.schemas.websocket import (
     AgentCompleted,
     AgentFailed,
     AgentStarted,
+    AgentWarning,
     ExperimentCompleted,
     ExperimentEvent,
     ExperimentFailed,
@@ -34,6 +35,20 @@ from app.services.websocket_manager import get_connection_manager
 
 logger = logging.getLogger("autosage.events")
 
+# The API process's main event loop, captured at startup. Used to schedule
+# event publishes that originate in the embedded worker thread / Celery task
+# threads so WebSocket sends always happen on the loop the sockets live on.
+_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_main_event_loop(loop: Optional[asyncio.AbstractEventLoop]) -> None:
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
+def get_main_event_loop() -> Optional[asyncio.AbstractEventLoop]:
+    return _MAIN_LOOP
+
 
 class EventPublisher:
     """Publishes experiment events to subscribed WebSocket clients."""
@@ -46,11 +61,22 @@ class EventPublisher:
     async def publish(self, experiment_id: UUID, event: ExperimentEvent) -> int:
         """Publish an event to all connections for an experiment.
 
-        Returns number of connections that received the event.
+        Local in-memory broadcast first; when nobody local received it
+        (e.g. a split Celery worker publishing while WS clients live in the
+        API process), hand it to the Redis bridge so the API can forward it.
+        The bridge is skipped automatically when Redis is unreachable, and
+        skipping it when local delivery succeeded avoids duplicate events
+        in single-process (eager) mode.
+
+        Returns number of connections that received the event locally.
         Never raises — failures are logged only.
         """
         try:
             sent = await self._manager.broadcast(experiment_id, event)
+            if sent == 0:
+                from app.services.websocket_manager import publish_event_external
+
+                await publish_event_external(event)
             return sent
         except Exception as exc:
             logger.warning(
@@ -66,18 +92,40 @@ class EventPublisher:
     def publish_sync(self, experiment_id: UUID, event: ExperimentEvent) -> int:
         """Sync wrapper for Celery/tasks — runs async publish in a helper thread.
 
-        Safe to call from synchronous Celery task code.
+        Safe to call from synchronous Celery task code. When the API's main
+        loop is known (embedded worker in the same process), the publish is
+        scheduled onto it so WebSocket sends land on the sockets' own loop.
         """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.publish(experiment_id, event))
+            loop = None
+        if loop is None and _MAIN_LOOP is not None and not _MAIN_LOOP.is_closed():
+            try:
+                return asyncio.run_coroutine_threadsafe(
+                    self.publish(experiment_id, event), _MAIN_LOOP
+                ).result(timeout=10)
+            except Exception as exc:  # loop gone: fall through to isolated run
+                logger.debug("main_loop_publish_failed", extra={"error": str(exc)})
+        if loop is None:
+            return asyncio.run(self._publish_with_cleanup(experiment_id, event))
 
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, self.publish(experiment_id, event))
+            future = pool.submit(asyncio.run, self._publish_with_cleanup(experiment_id, event))
             return future.result()
+
+    async def _publish_with_cleanup(self, experiment_id: UUID, event: ExperimentEvent) -> int:
+        try:
+            return await self.publish(experiment_id, event)
+        finally:
+            try:
+                from app.db.session import dispose_engine_for_current_loop
+
+                await dispose_engine_for_current_loop()
+            except Exception:
+                pass
 
     # ---- Experiment lifecycle ----
 
@@ -399,6 +447,22 @@ def publish_agent_failed(
                 "error_type": error_type,
                 "will_retry": will_retry,
             },
+        ),
+    )
+
+
+def publish_agent_warning(
+    experiment_id: UUID,
+    agent_name: str,
+    stage: str,
+    warning: str,
+    error: Optional[str] = None,
+) -> int:
+    return get_event_publisher().publish_sync(
+        experiment_id,
+        AgentWarning(
+            experiment_id=experiment_id,
+            payload={"agent_name": agent_name, "stage": stage, "warning": warning, "error": error},
         ),
     )
 

@@ -119,6 +119,25 @@ class BaseAgent(ABC):
         )
         
         experiment_id = state.get("experiment_id")
+
+        def _warn_ui(message: str, err: Optional[str] = None) -> None:
+            try:
+                if not experiment_id:
+                    return
+                from uuid import UUID
+
+                from app.services import event_publisher
+
+                event_publisher.publish_agent_warning(
+                    UUID(str(experiment_id)),
+                    agent_name=self.stage,
+                    stage=self.stage,
+                    warning=message,
+                    error=err,
+                )
+            except Exception:
+                logger.warning("agent_warning_publish_failed", exc_info=True)
+
         with agent_execution_context() as agent_exec_id:
             client = self._client()
             use_llm = True
@@ -128,6 +147,7 @@ class BaseAgent(ABC):
                         f"{self.stage}: no LLM providers configured and heuristic fallback disabled"
                     )
                 use_llm = False
+                _warn_ui("no LLM providers configured — using heuristic fallback", "LLMUnavailableError: no providers")
 
             if use_llm:
                 try:
@@ -168,6 +188,7 @@ class BaseAgent(ABC):
                         agent=self.stage, error=str(exc),
                         experiment=experiment_id, agent_execution=agent_exec_id
                     )
+                    _warn_ui(f"LLM model unavailable — using heuristic fallback at stage '{self.stage}'", f"{type(exc).__name__}: {exc}")
 
             output = self.heuristic(state)
             if not output.source or output.source == "llm":

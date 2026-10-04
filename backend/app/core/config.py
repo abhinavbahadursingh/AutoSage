@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = ""
     CELERY_EXPERIMENT_QUEUE: str = "experiments"
     CELERY_TASK_ALWAYS_EAGER: bool = False  # True in tests: run inline, no broker
+    # Dev/local convenience: run a Celery worker inside the API process so
+    # queued experiments execute without a separately-started worker. Set to
+    # False in production where a standalone worker process runs instead.
+    CELERY_EMBEDDED_WORKER: bool = True
+    CELERY_EMBEDDED_WORKER_POOL: str = "solo"  # solo pool is Windows-safe
+    CELERY_EMBEDDED_WORKER_CONCURRENCY: int = 2
     CELERY_TASK_TIME_LIMIT: int = 1800  # hard kill (s) per experiment task
     CELERY_TASK_SOFT_TIME_LIMIT: int = 1500  # SoftTimeLimitExceeded (s) warning
     CELERY_RETRY_BACKOFF_BASE: int = 60  # countdown = base * 2**attempt (s)
@@ -83,6 +89,7 @@ class Settings(BaseSettings):
     # Sandbox (later phases)
     DOCKER_SANDBOX_IMAGE: str = "autosage-runner:latest"
     SANDBOX_TIMEOUT_SECONDS: int = 300
+    SANDBOX_ENABLED: bool = True
 
     # --- Phase 2: Authentication (Supabase Auth / Better Auth as identity provider) ---
     # Supabase Auth issues RS256 JWTs via JWKS. Better Auth issues HS256 JWTs
@@ -123,6 +130,8 @@ class Settings(BaseSettings):
     # Sandbox security
     SANDBOX_PIDS_LIMIT: int = 100
     SANDBOX_READONLY_ROOTFS: bool = True
+    SANDBOX_DOCKER_TIMEOUT: float = 30.0  # Docker API timeout in seconds
+    SANDBOX_ENABLED: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

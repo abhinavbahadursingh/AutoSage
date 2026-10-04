@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
 import type { Tone } from '../../lib/tones'
 
-const TONES: Record<Tone, string> = {
-  neutral: 'border-ink-500 text-paper-200 bg-ink-750',
-  accent: 'border-accent-600/60 text-accent-300 bg-accent-900/60',
-  verify: 'border-verify-500/40 text-verify-500 bg-verify-900/60',
-  warn: 'border-warn-500/40 text-warn-500 bg-warn-900/60',
-  conflict: 'border-conflict-500/40 text-conflict-500 bg-conflict-900/60',
-  dim: 'border-ink-600 text-paper-400 bg-transparent',
+const TONE_STYLES: Record<Tone, { bg: string; border: string; color: string }> = {
+  neutral:  { bg: 'color-mix(in oklch, var(--as-text-3) 8%, transparent)',    border: 'var(--as-border)',                                          color: 'var(--as-text-2)'     },
+  accent:   { bg: 'color-mix(in oklch, var(--as-accent) 12%, transparent)',    border: 'color-mix(in oklch, var(--as-accent) 30%, transparent)',     color: 'var(--as-accent-hi)'  },
+  verify:   { bg: 'color-mix(in oklch, var(--as-verify) 10%, transparent)',    border: 'color-mix(in oklch, var(--as-verify) 30%, transparent)',     color: 'var(--as-verify)'     },
+  warn:     { bg: 'color-mix(in oklch, var(--as-warn) 10%, transparent)',      border: 'color-mix(in oklch, var(--as-warn) 30%, transparent)',       color: 'var(--as-warn)'       },
+  conflict: { bg: 'color-mix(in oklch, var(--as-error) 10%, transparent)',     border: 'color-mix(in oklch, var(--as-error) 30%, transparent)',      color: 'var(--as-error)'      },
+  dim:      { bg: 'transparent',                                                border: 'var(--as-border)',                                          color: 'var(--as-text-3)'     },
 }
 
 export function Badge({
@@ -19,9 +19,11 @@ export function Badge({
   tone?: Tone
   className?: string
 }) {
+  const s = TONE_STYLES[tone]
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-[1px] text-[12.5px] font-medium tracking-[0.04em] uppercase ${TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-[2px] text-[11.5px] font-semibold tracking-[0.05em] uppercase ${className}`}
+      style={{ background: s.bg, borderColor: s.border, color: s.color }}
     >
       {children}
     </span>

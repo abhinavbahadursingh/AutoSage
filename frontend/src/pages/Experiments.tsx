@@ -1,4 +1,4 @@
-import { Plus, Search } from 'lucide-react'
+import { Plus, RefreshCw, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/layout/Sidebar'
@@ -6,9 +6,17 @@ import { Badge } from '../components/ui/Badge'
 import { statusTone } from '../lib/tones'
 import { EmptyState } from '../components/ui/Primitives'
 import { useStore } from '../store/context'
+import { formatApiDate } from '../data/experiments'
 
 export function ExperimentsPage() {
-  const { experiments, openExperiment } = useStore()
+  const {
+    experiments,
+    experimentsLoading,
+    experimentsError,
+    refreshExperiments,
+    openExperiment,
+    authError,
+  } = useStore()
   const navigate = useNavigate()
   const [q, setQ] = useState('')
 
@@ -29,18 +37,30 @@ export function ExperimentsPage() {
     navigate('/workspace')
   }
 
+  const errorDetail = authError ?? experimentsError
+
   return (
     <div className="flex h-full min-w-0 flex-col">
       <PageHeader
         title="Experiments"
         subtitle="Every run recorded in this workspace, with its verification outcome. Click a row to load it into the experiment workspace."
         right={
-          <button
-            onClick={() => navigate('/new')}
-            className="flex h-[28px] items-center gap-1.5 rounded-sm border border-accent-500 bg-accent-500 px-2.5 text-[14px] font-medium text-ink-950 transition hover:bg-accent-400"
-          >
-            <Plus size={13} /> New Experiment
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void refreshExperiments()}
+              disabled={experimentsLoading}
+              className="flex h-[28px] items-center gap-1.5 rounded-sm border border-ink-500 bg-ink-850 px-2.5 text-[14px] font-medium text-paper-200 transition hover:border-ink-400 hover:bg-ink-800 disabled:opacity-50"
+              title="Refresh from backend"
+            >
+              <RefreshCw size={13} className={experimentsLoading ? 'animate-spin' : undefined} /> Refresh
+            </button>
+            <button
+              onClick={() => navigate('/new')}
+              className="flex h-[28px] items-center gap-1.5 rounded-sm border border-accent-500 bg-accent-500 px-2.5 text-[14px] font-medium text-ink-950 transition hover:bg-accent-400"
+            >
+              <Plus size={13} /> New Experiment
+            </button>
+          </div>
         }
       />
 
@@ -54,12 +74,45 @@ export function ExperimentsPage() {
             className="h-[28px] w-[280px] rounded-sm border border-ink-600 bg-ink-850 pr-2 pl-7 text-[15px] text-paper-100 outline-none transition focus:border-accent-500"
           />
         </div>
-        <span className="mono text-[13px] text-paper-500">{rows.length} runs</span>
+        <span className="mono text-[13px] text-paper-500">
+          {rows.length} runs
+          {experimentsLoading ? ' · loading…' : ''}
+        </span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {rows.length === 0 ? (
-          <EmptyState title="No experiments match" detail="Clear the filter or start a new experiment." />
+        {errorDetail && experiments.length === 0 ? (
+          <EmptyState
+            title="Could not load experiments"
+            detail={errorDetail}
+            action={
+              <button
+                onClick={() => void refreshExperiments()}
+                className="mt-4 h-[30px] rounded-sm border border-ink-500 bg-ink-850 px-3 text-[14px] text-paper-200 transition hover:border-ink-400"
+              >
+                Retry
+              </button>
+            }
+          />
+        ) : experimentsLoading && experiments.length === 0 ? (
+          <EmptyState title="Loading experiments…" detail="Fetching from GET /api/v1/experiments" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title={experiments.length === 0 ? 'No experiments yet' : 'No experiments match'}
+            detail={
+              experiments.length === 0
+                ? 'Create your first experiment to see it here.'
+                : 'Clear the filter or start a new experiment.'
+            }
+            action={
+              <button
+                onClick={() => navigate('/new')}
+                className="mt-4 h-[30px] rounded-sm border border-accent-500 bg-accent-500 px-3 text-[14px] font-medium text-ink-950 transition hover:bg-accent-400"
+              >
+                New Experiment
+              </button>
+            }
+          />
         ) : (
           <table className="w-full min-w-[900px] border-collapse text-left">
             <thead className="sticky top-0 z-10 bg-ink-900">
@@ -84,25 +137,32 @@ export function ExperimentsPage() {
                   <td className="max-w-[300px] px-4 py-2.5">
                     <div className="truncate text-[15.5px] font-medium text-paper-100">{e.name}</div>
                     <div className="mono mt-0.5 truncate text-[12.5px] text-paper-500">
-                      {e.id} · {e.owner}
+                      {e.id.slice(0, 8)}… · {e.owner}
                     </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge tone={statusTone(e.status)}>{e.status}</Badge>
                   </td>
-                  <td className="mono max-w-[170px] truncate px-3 py-2.5 text-[13.5px] text-paper-300" title={e.dataset}>
+                  <td
+                    className="mono max-w-[170px] truncate px-3 py-2.5 text-[13.5px] text-paper-300"
+                    title={e.dataset}
+                  >
                     {e.dataset}
                   </td>
                   <td className="px-3 py-2.5 text-[14px] text-paper-400">
                     target <span className="mono text-paper-200">{e.target}</span> ·{' '}
                     <span className="mono text-paper-200">{e.metric}</span>
                   </td>
-                  <td className="mono max-w-[180px] truncate px-3 py-2.5 text-[13.5px] text-paper-300">{e.model}</td>
+                  <td className="mono max-w-[180px] truncate px-3 py-2.5 text-[13.5px] text-paper-300">
+                    {e.model}
+                  </td>
                   <td className="mono tnum px-3 py-2.5 text-right text-[13.5px] text-paper-300">{e.runtime}</td>
                   <td className="px-3 py-2.5">
                     <Badge tone={statusTone(e.verificationStatus)}>{e.verificationStatus}</Badge>
                   </td>
-                  <td className="mono px-4 py-2.5 text-right text-[13px] text-paper-500">{e.createdAt}</td>
+                  <td className="mono px-4 py-2.5 text-right text-[13px] text-paper-500">
+                    {formatApiDate(e.createdAt)}
+                  </td>
                 </tr>
               ))}
             </tbody>

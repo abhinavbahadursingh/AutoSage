@@ -95,9 +95,9 @@ class ReproducibilityRecord(Base):
     )
 
     # Relationships
-    experiment = relationship("Experiment", back_populates="reproducibility_records", lazy="selectin")
-    ml_run = relationship("MLRun", back_populates="reproducibility_records", lazy="selectin")
-    dataset = relationship("Dataset", back_populates="reproducibility_records", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="reproducibility_records")
+    ml_run = relationship("MLRun", back_populates="reproducibility_records")
+    dataset = relationship("Dataset", back_populates="reproducibility_records")
 
     def __repr__(self) -> str:
         return f"<ReproducibilityRecord id={self.id} experiment={self.experiment_id}>"

@@ -28,10 +28,8 @@ class Dataset(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    workspace = relationship("Workspace", back_populates="datasets", lazy="selectin")
+    workspace = relationship("Workspace", back_populates="datasets")
     files = relationship(
-        "FileMetadata", back_populates="dataset", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "FileMetadata", back_populates="dataset", cascade="all, delete-orphan")
     reproducibility_records = relationship(
-        "ReproducibilityRecord", back_populates="dataset", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "ReproducibilityRecord", back_populates="dataset", cascade="all, delete-orphan")

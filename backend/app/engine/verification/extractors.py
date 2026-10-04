@@ -280,8 +280,8 @@ class SafetyClaimExtractor(ClaimExtractor):
                 )
 
         # From payload
-        if "checks" in payload and isinstance(payload["checks"], list):
-            for check in payload["checks"]:
+        if "checks" in decision.payload and isinstance(decision.payload["checks"], list):
+            for check in decision.payload["checks"]:
                 if isinstance(check, str) and "pass" in check.lower():
                     claims.append(
                         ExtractedClaim(

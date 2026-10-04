@@ -1,14 +1,14 @@
-"""Verification SQLAlchemy Model (Phase 3 data layer).
+"""Verification SQLAlchemy Model (Phase 12 extended).
 
-Records the outcome of one empirical verification gate check (AST security
-analysis, data-leakage detection, metric sanity, baseline dominance, ...).
-The checks themselves run in later phases; here we persist gate results so
-acceptance of a pipeline/run is auditable.
+Records the outcome of the empirical verification gate for an experiment,
+including per-decision details: decision ID, evidence summary, verification
+result (VERIFIED/CONFLICT/REJECTED/UNVERIFIED/ABSTAIN), reasoning, and final
+status. This enables audit trails and quarantine of unverified experiences.
 """
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -16,7 +16,10 @@ from app.models.base import Base
 
 
 class Verification(Base):
+    """Verification of an experiment's decisions via the empirical gate."""
+
     __tablename__ = "verifications"
+
     __table_args__ = (
         Index("ix_verifications_experiment_check", "experiment_id", "check_name"),
     )
@@ -35,17 +38,23 @@ class Verification(Base):
         index=True,
     )
     check_name = Column(String(100), nullable=False, index=True)
-    status = Column(String(30), nullable=False, default="PENDING", index=True)
-    details = Column(JSONB, nullable=False, default=dict)
+    # Per-decision results: maps decision_id -> {status, confidence, reasoning}
+    decisions = Column(JSONB, nullable=False, default=dict)
+    overall_status = Column(
+        String(30), nullable=False, default="UNVERIFIED", index=True
+    )
+    overall_confidence = Column(Float, nullable=True, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
     experiment = relationship(
-        "Experiment", back_populates="verifications", lazy="selectin"
-    )
-    ml_run = relationship("MLRun", back_populates="verifications", lazy="selectin")
+        "Experiment", back_populates="verifications")
+    ml_run = relationship("MLRun", back_populates="verifications")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
-        return f"<Verification id={self.id} check={self.check_name!r} status={self.status!r}>"
+        return (
+            f"<Verification id={self.id} experiment={self.experiment_id} "
+            f"status={self.overall_status!r}>"
+        )

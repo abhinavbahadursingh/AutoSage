@@ -9,11 +9,13 @@ and verification rules can be plugged in without changing the core.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.engine.evidence.source import (
     EvidencePiece,
@@ -39,6 +41,53 @@ from app.engine.verification.extractors import (
 
 logger = logging.getLogger("autosage.verification")
 
+# Language that turns a piece into a challenge rather than a mention.
+_NEGATION_RE = re.compile(
+    r"\b(?:suspicious|impossible|invalid|unreliable|misleading|wrong|cheat\w*"
+    r"|fraudulent|not plausible|too good|indicat\w*)\b",
+    re.IGNORECASE,
+)
+# Standalone negation words used to decide whether a piece is critical at all.
+_NEGATION_TOKENS = (
+    "suspicious", "impossible", "invalid", "unreliable", "misleading",
+    "wrong", "cheat", "fraud", "indicat", "leak", "too good", "not plausible",
+)
+
+
+def _contradicts_metric_value(piece_text: str, value: float) -> bool:
+    """Does this piece actually contradict *this* value?
+
+    Generic guidance ("accuracy should be between 0 and 1", "perfect scores
+    are suspicious") only contradicts the values the rule rules out -- it must
+    not silently contradict every claim that merely shares the metric name.
+    """
+    if not any(token in piece_text for token in _NEGATION_TOKENS):
+        return False
+
+    forms = (str(value), f"{value:.2f}", f"{value:.3f}")
+
+    # (a) A rule about perfect scores contradicts a perfect score.
+    if abs(value - 1.0) < 1e-9 and (
+        "perfect" in piece_text or "1.0" in piece_text or "impossible" in piece_text
+    ):
+        return True
+    # (b) A rule about the 0..1 range contradicts an out-of-range value.
+    if value < 0.0 or value > 1.0:
+        if "between 0 and 1" in piece_text or "0 and 1" in piece_text or "range" in piece_text:
+            return True
+    # (c) The piece ties negation language to this exact number.
+    return _value_negated_in_sentence(piece_text, forms)
+
+
+def _value_negated_in_sentence(piece_text: str, forms) -> bool:
+    """True when the sentence carrying the value also carries negation."""
+    for sentence in piece_text.split("."):
+        if not any(form and form in sentence for form in forms):
+            continue
+        if _NEGATION_RE.search(sentence):
+            return True
+    return False
+
 
 class VerificationEngine:
     """Main verification engine coordinating the full pipeline."""
@@ -49,11 +98,13 @@ class VerificationEngine:
         min_evidence_credibility: float = 0.5,
         min_supporting_pieces: int = 1,
         conflict_threshold: float = 0.7,
+        min_abstain_confidence: float = 0.3,
     ):
         self.session = session
         self.min_evidence_credibility = min_evidence_credibility
         self.min_supporting_pieces = min_supporting_pieces
         self.conflict_threshold = conflict_threshold
+        self.min_abstain_confidence = min_abstain_confidence
         self._sources_initialized = False
 
     async def _ensure_sources(self) -> None:
@@ -129,11 +180,12 @@ class VerificationEngine:
                 value = structured.get("value")
                 if metric and metric in piece_text:
                     if value is not None:
-                        # Check if evidence mentions similar values
-                        if str(value) in piece_text or f"{value:.2f}" in piece_text:
-                            is_supporting = True
-                        elif "impossible" in piece_text or "suspicious" in piece_text:
+                        # A piece may only contradict the value it rules out;
+                        # mentioning the value is support otherwise.
+                        if _contradicts_metric_value(piece_text, float(value)):
                             is_contradicting = True
+                        elif str(value) in piece_text or f"{value:.2f}" in piece_text:
+                            is_supporting = True
                     else:
                         is_supporting = True
 
@@ -183,6 +235,31 @@ class VerificationEngine:
         """Determine verification status from evidence."""
         n_support = len(supporting)
         n_contra = len(contradicting)
+        avg_cred = (
+            sum(p.credibility_score for p in supporting) / n_support
+            if n_support > 0
+            else 0.0
+        )
+
+        # --- ABSTAIN conditions ---
+        # Low confidence: even if we have some evidence, abstain if average credibility
+        # is below the abstention threshold
+        if n_support > 0 and avg_cred < self.min_abstain_confidence:
+            return (
+                ClaimStatus.ABSTAIN,
+                avg_cred,
+                f"Insufficient confidence (avg credibility {avg_cred:.2f} < {self.min_abstain_confidence}) for claim '{claim.text[:30]}...'"
+            )
+
+        # Low credibility contradicting evidence: abstain rather than low-confidence conflict
+        if n_contra > 0:
+            max_contra_cred = max(p.credibility_score for p in contradicting)
+            if max_contra_cred < self.min_abstain_confidence:
+                return (
+                    ClaimStatus.ABSTAIN,
+                    max_contra_cred,
+                    f"Low-confidence contradicting evidence (max credibility {max_contra_cred:.2f} < {self.min_abstain_confidence}) for claim '{claim.text[:30]}...'"
+                )
 
         if n_contra > 0:
             # Has contradicting evidence
@@ -201,7 +278,12 @@ class VerificationEngine:
 
         if n_support >= self.min_supporting_pieces:
             # Has enough supporting evidence
-            avg_cred = sum(p.credibility_score for p in supporting) / n_support
+            if avg_cred < self.min_abstain_confidence:
+                return (
+                    ClaimStatus.ABSTAIN,
+                    avg_cred,
+                    f"Supporting evidence found but average credibility {avg_cred:.2f} < {self.min_abstain_confidence}"
+                )
             return (
                 ClaimStatus.VERIFIED,
                 avg_cred,
@@ -210,14 +292,20 @@ class VerificationEngine:
 
         if n_support > 0:
             # Some support but not enough
-            avg_cred = sum(p.credibility_score for p in supporting) / n_support
+            if avg_cred < self.min_abstain_confidence:
+                return (
+                    ClaimStatus.ABSTAIN,
+                    avg_cred * 0.5,
+                    f"Only {n_support} supporting evidence piece(s), need {self.min_supporting_pieces}, and low confidence"
+                )
             return (
                 ClaimStatus.UNVERIFIED,
                 avg_cred * 0.5,
                 f"Only {n_support} supporting evidence piece(s), need {self.min_supporting_pieces}"
             )
 
-        # No evidence found
+        # No evidence found - abstain when no evidence rather than unverified
+        # only if we have a confidence from the decision itself to compare against
         return (
             ClaimStatus.UNVERIFIED,
             0.0,
@@ -272,17 +360,22 @@ class VerificationEngine:
         conflict = sum(1 for r in results if r.status == ClaimStatus.CONFLICT)
         rejected = sum(1 for r in results if r.status == ClaimStatus.REJECTED)
         unverified = sum(1 for r in results if r.status == ClaimStatus.UNVERIFIED)
+        abstained = sum(1 for r in results if r.status == ClaimStatus.ABSTAIN)
 
         if conflict > 0:
             overall = ClaimStatus.CONFLICT
         elif rejected > 0:
             overall = ClaimStatus.REJECTED
+        elif abstained == total and total > 0:
+            overall = ClaimStatus.ABSTAIN
         elif verified == total and total > 0:
             overall = ClaimStatus.VERIFIED
         else:
             overall = ClaimStatus.UNVERIFIED
 
-        overall_conf = sum(r.confidence_score for r in results) / max(total, 1)
+        # Compute overall confidence only from non-abstained results
+        non_abstained = [r for r in results if r.status != ClaimStatus.ABSTAIN]
+        overall_conf = sum(r.confidence_score for r in non_abstained) / max(len(non_abstained), 1)
 
         return ClaimVerificationResponse(
             results=results,
@@ -330,7 +423,9 @@ class VerificationEngine:
         from sqlalchemy import select
         from app.models.decision import Decision
 
-        stmt = select(Decision).where(Decision.experiment_id == experiment_id)
+        stmt = select(Decision).where(Decision.experiment_id == experiment_id).options(
+            selectinload(Decision.agent_execution)
+        )
         if agent_name:
             from app.models.agent_execution import AgentExecution
             stmt = stmt.join(AgentExecution).where(AgentExecution.agent_name == agent_name)

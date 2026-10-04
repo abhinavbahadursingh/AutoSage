@@ -29,11 +29,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession, get_current_user_ws
 from app.models.experiment import Experiment
+from app.models.workspace import Workspace
 from app.repositories.experiment_repository import ExperimentRepository
 from app.services.event_publisher import get_event_publisher
 from app.services.websocket_manager import get_connection_manager
@@ -47,14 +48,18 @@ logger = logging.getLogger("autosage.websocket")
 async def experiment_websocket(
     websocket: WebSocket,
     experiment_id: UUID,
+    session: DbSession,
     token: str = Query(default=None),
-    session: AsyncSession = Depends(DbSession),
 ) -> None:
     """WebSocket endpoint for real-time experiment events.
 
     Authentication via query param `token` (for browser EventSource compatibility)
     or Authorization header. Falls back to cookie/session if configured.
     """
+    # Accept first so auth/workspace failures surface as a WS close (1008),
+    # not an HTTP 403 handshake rejection (browsers report that as "failed").
+    await websocket.accept()
+
     # Authenticate the user
     user = None
     try:
@@ -71,11 +76,27 @@ async def experiment_websocket(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Experiment not found")
         return
 
-    if experiment.workspace_id not in [ws.id for ws in user.workspaces]:
+    # Explicit workspace query: relationships are lazy now, and the
+    # pooled connection is released below before the socket loop.
+    ws_rows = await session.execute(
+        select(Workspace.id).where(Workspace.owner_id == user.id)
+    )
+    user_workspace_ids = set(ws_rows.scalars().all())
+    if experiment.workspace_id not in user_workspace_ids:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Forbidden")
         return
 
-    # Connect to the experiment channel
+    # Release the pooled DB connection BEFORE entering the long-lived
+    # receive loop below. Holding DbSession for the socket lifetime pins one
+    # pool connection per open tab (pool_size=5) and leaks it on unclean
+    # disconnects (closed tab, sleep, HMR reload), starving every DB-backed
+    # request — including future WS handshakes. The loop needs no DB
+    # (manager is in-memory), so close eagerly; the dependency's own
+    # finally-close is idempotent and remains as a safety net.
+    user_id = user.id
+    await session.close()
+
+    # Connect to the experiment channel (already accepted above)
     manager = get_connection_manager()
     connection_id = await manager.connect(websocket, experiment_id)
 
@@ -93,7 +114,7 @@ async def experiment_websocket(
         "ws_experiment_connected",
         extra={
             "experiment_id": str(experiment_id),
-            "user_id": str(user.id),
+            "user_id": str(user_id),
             "connection_id": connection_id,
         },
     )
@@ -118,13 +139,15 @@ async def experiment_websocket(
 @router.websocket("/ws")
 async def websocket_root(
     websocket: WebSocket,
+    session: DbSession,
     token: str = Query(default=None),
-    session: AsyncSession = Depends(DbSession),
 ) -> None:
     """Root WebSocket endpoint — client must send subscribe message with experiment_id.
 
     Useful for clients that want a single persistent connection and switch experiments.
     """
+    await websocket.accept()
+
     user = None
     try:
         user = await get_current_user_ws(token, session)
@@ -133,11 +156,20 @@ async def websocket_root(
         logger.warning("ws_root_auth_failed", extra={"error": str(exc)})
         return
 
-    manager = get_connection_manager()
-    connection_id = str(__import__("uuid").uuid4())
+    # Same as above: release the pooled connection now — auth is done and
+    # the socket loop below is pure in-memory. Capture what the subscribe
+    # handler needs first (lazy relationships can't load after close).
+    from uuid import uuid4 as _uuid4
 
-    # Accept but don't subscribe yet — wait for subscribe message
-    await websocket.accept()
+    ws_rows = await session.execute(
+        select(Workspace.id).where(Workspace.owner_id == user.id)
+    )
+    workspace_ids = list(ws_rows.scalars().all())
+    user_id = user.id
+    await session.close()
+
+    manager = get_connection_manager()
+    connection_id = str(_uuid4())
 
     # Register connection without experiment (will be set on subscribe)
     async with manager._lock:
@@ -151,7 +183,7 @@ async def websocket_root(
         ).model_dump_json()
     )
 
-    logger.info("ws_root_connected", extra={"user_id": str(user.id), "connection_id": connection_id})
+    logger.info("ws_root_connected", extra={"user_id": str(user_id), "connection_id": connection_id})
 
     try:
         while True:
@@ -173,16 +205,23 @@ async def websocket_root(
                     )
                     continue
 
-                # Verify access
-                repo = ExperimentRepository(session)
-                experiment = await repo.get_by_id(msg.experiment_id)
+                # Verify access with a fresh short-lived session: the
+                # endpoint-level session was closed after auth (see above)
+                # so a subscribe never pins a pooled connection.
+                from app.db import session as _db_session
+
+                _db_session.init_engine()
+                assert _db_session.AsyncSessionLocal is not None
+                async with _db_session.AsyncSessionLocal() as sub_session:
+                    repo = ExperimentRepository(sub_session)
+                    experiment = await repo.get_by_id(msg.experiment_id)
                 if experiment is None:
                     await websocket.send_text(
                         ServerMessage(type="error", message="Experiment not found").model_dump_json()
                     )
                     continue
 
-                if experiment.workspace_id not in [ws.id for ws in user.workspaces]:
+                if experiment.workspace_id not in workspace_ids:
                     await websocket.send_text(
                         ServerMessage(type="error", message="Forbidden").model_dump_json()
                     )

@@ -1,3 +1,5 @@
+import type { ApiExperimentStatus, ExperimentRead } from './api'
+
 export type StageId =
   | 'request'
   | 'discovery'
@@ -11,7 +13,8 @@ export type StageId =
 
 export type NodeState = 'idle' | 'queued' | 'active' | 'done' | 'failed'
 
-export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed' | 'failed'
+/** Backend experiment lifecycle (ExperimentStatus str enum). */
+export type ExperimentStatus = ApiExperimentStatus
 
 export type VerificationStatus = 'VERIFIED' | 'UNVERIFIED' | 'CONFLICTING' | 'QUARANTINED'
 
@@ -33,9 +36,10 @@ export interface AgentNode {
   idleAction: string
   input: string
   decision: string
-  confidence: number
+  confidence: number | null
   evidence: string[]
   verification: { status: VerificationStatus; note: string }
+  verification_abstained?: boolean
   tools: ToolCall[]
   startedAt?: string
   elapsedMs?: number
@@ -49,35 +53,17 @@ export interface LogLine {
   text: string
 }
 
-export interface FoldResult {
-  fold: number
-  trainRows: number
-  valRows: number
-  metric: number
-  auc: number
-  fitSec: number
-}
-
-export interface PipelineStep {
-  index: number
-  op: string
-  detail: string
-}
-
-export interface ExperimentResult {
-  bestPipeline: string
-  pipelineSteps: PipelineStep[]
-  metrics: { name: string; value: number; baseline: number; unit?: string }[]
-  folds: FoldResult[]
-  featureImportance: { feature: string; importance: number; direction: 'positive' | 'negative' }[]
-  datasetInsights: { label: string; value: string; note?: string }[]
-  reproducibility: { label: string; value: string }[]
-  leakageChecks: { check: string; status: VerificationStatus; note: string }[]
+export interface MetricPoint {
+  name: string
+  value: number
 }
 
 export interface Experiment {
+  /** Backend UUID */
   id: string
+  workspaceId: string
   name: string
+  description: string | null
   prompt: string
   status: ExperimentStatus
   dataset: string
@@ -89,23 +75,20 @@ export interface Experiment {
   runtime: string
   verificationStatus: VerificationStatus
   createdAt: string
+  updatedAt: string
+  startedAt: string | null
+  completedAt: string | null
+  errorDetail: string | null
+  retryCount: number
+  maxRetries: number
   owner: string
+  config: Record<string, unknown>
+  resultSummary: Record<string, unknown>
+  metrics: MetricPoint[]
   nodes: AgentNode[]
   logs: LogLine[]
-  result?: ExperimentResult
-}
-
-export interface EvidenceClaim {
-  id: string
-  claim: string
-  source: string
-  agent: string
-  experiment: string
-  status: VerificationStatus
-  confidence: number
-  supporting: string[]
-  conflicting?: string[]
-  timestamp: string
+  /** Raw backend payload for adapters/debugging */
+  raw: ExperimentRead
 }
 
 export interface MemoryEntry {

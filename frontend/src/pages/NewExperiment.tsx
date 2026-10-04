@@ -17,6 +17,7 @@ const METRICS = [
   { id: 'precision', label: 'Precision' },
   { id: 'roc_auc', label: 'ROC-AUC' },
   { id: 'f1', label: 'F1' },
+  { id: 'accuracy', label: 'Accuracy' },
   { id: 'mae', label: 'MAE' },
   { id: 'rmse', label: 'RMSE' },
   { id: 'log_loss', label: 'Log loss' },
@@ -62,11 +63,10 @@ function analyze(prompt: string) {
             ? 'f1'
             : 'auto'
   const wantsCompare = /compare|several|multiple|search|tune/.test(p)
-  const wantsRecall = /recall/.test(p)
   const keywords = ['churn', 'fraud', 'default', 'calibrated', 'drift', 'ticket', 'eta', 'recall', 'leakage'].filter(
     (k) => p.includes(k),
   )
-  return { task, metricHint, wantsCompare, wantsRecall, keywords }
+  return { task, metricHint, wantsCompare, keywords }
 }
 
 function Control({
@@ -94,17 +94,20 @@ const selectCls =
 
 export function NewExperimentPage() {
   const navigate = useNavigate()
-  const { createAndRun, memory } = useStore()
+  const { createAndRun, memory, memoryLoading, busy } = useStore()
   const [prompt, setPrompt] = useState(EXAMPLES[0])
-  const [dataset, setDataset] = useState(DATASETS[0].name)
+  const [dataset, setDataset] = useState(DATASETS[0]?.name ?? '')
   const [target, setTarget] = useState('churn')
   const [metric, setMetric] = useState('recall')
   const [budget, setBudget] = useState('12 fit-min')
   const [level, setLevel] = useState<VerificationLevel>('strict')
+  const [submitting, setSubmitting] = useState(false)
 
   const analysis = useMemo(() => analyze(prompt), [prompt])
   const targets = TARGETS_BY_DATASET[dataset] ?? ['target']
-  const memoryHits = memory.filter((m) => analysis.keywords.some((k) => m.tags.join(' ').includes(k) || m.experiment.toLowerCase().includes(k)))
+  const memoryHits = memory.filter((m) =>
+    analysis.keywords.some((k) => m.tags.join(' ').includes(k) || m.experiment.toLowerCase().includes(k)),
+  )
 
   const onDataset = (name: string) => {
     setDataset(name)
@@ -112,10 +115,24 @@ export function NewExperimentPage() {
     if (t) setTarget(t[0])
   }
 
-  const submit = () => {
-    if (!prompt.trim()) return
-    createAndRun({ prompt: prompt.trim(), dataset, target, metric, budget, verificationLevel: level })
-    navigate('/workspace')
+  const submit = async () => {
+    if (!prompt.trim() || submitting || busy) return
+    setSubmitting(true)
+    try {
+      await createAndRun({
+        prompt: prompt.trim(),
+        dataset,
+        target,
+        metric,
+        budget,
+        verificationLevel: level,
+      })
+      navigate('/workspace')
+    } catch {
+      /* toast already shown by store */
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -128,16 +145,18 @@ export function NewExperimentPage() {
               Describe the task. AutoSage plans the run.
             </h1>
             <p className="mt-1 max-w-[70ch] text-[15px] leading-relaxed text-paper-400">
-              The orchestrator compiles your request into a 9-stage task graph, assigns 8 agents, and verifies every
-              claim before a pipeline is frozen.
+              The orchestrator compiles your request into a task graph, assigns specialized agents, and verifies claims
+              before a pipeline is frozen.
             </p>
           </div>
           <div className="mono hidden shrink-0 text-right text-[13px] leading-relaxed text-paper-500 md:block">
-            graph: 9 stages
+            graph: 9 stages (UI)
             <br />
             agents: 8 available
             <br />
             verification: {level}
+            <br />
+            budget: {budget} (UI only)
           </div>
         </div>
 
@@ -154,7 +173,7 @@ export function NewExperimentPage() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit()
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void submit()
             }}
             rows={5}
             spellCheck={false}
@@ -213,6 +232,7 @@ export function NewExperimentPage() {
                 </option>
               ))}
             </select>
+            <span className="mono text-[11.5px] text-paper-500">UI hint · not sent to API</span>
           </Control>
           <Control icon={<ShieldCheck size={11} />} label="Verification level">
             <div className="flex h-[30px] overflow-hidden rounded-sm border border-ink-600">
@@ -231,6 +251,7 @@ export function NewExperimentPage() {
                 </button>
               ))}
             </div>
+            <span className="mono text-[11.5px] text-paper-500">UI only · not in API schema</span>
           </Control>
         </div>
 
@@ -249,11 +270,7 @@ export function NewExperimentPage() {
                     : 'need a fuller description (24+ chars)'
                 }
               />
-              <Preflight
-                ok
-                label="Dataset available"
-                value={`${dataset} · provenance signed`}
-              />
+              <Preflight ok={Boolean(dataset)} label="Dataset selected" value={dataset || '—'} />
               <Preflight
                 ok={analysis.wantsCompare}
                 partial={!analysis.wantsCompare}
@@ -269,45 +286,45 @@ export function NewExperimentPage() {
                 partial={memoryHits.length === 0}
                 label="Memory matches"
                 value={
-                  memoryHits.length > 0
-                    ? `${memoryHits.length} prior ${memoryHits.length === 1 ? 'entry' : 'entries'} · ${memoryHits[0].experiment}`
-                    : 'no close prior — run will start from first principles'
+                  memoryLoading
+                    ? 'searching memory…'
+                    : memoryHits.length > 0
+                      ? `${memoryHits.length} prior ${memoryHits.length === 1 ? 'entry' : 'entries'} · ${memoryHits[0].experiment}`
+                      : 'no close prior — run will start from first principles'
                 }
               />
-              <Preflight
-                ok
-                label="Agents"
-                value="8 available · verification engine online"
-              />
+              <Preflight ok label="Backend" value="POST /experiments → start · JWT Bearer" />
             </ul>
           </div>
 
           <div className="flex flex-col justify-between rounded-md border border-ink-600 bg-ink-900 p-4">
             <div className="space-y-2 text-[14px] leading-relaxed text-paper-400">
               <div className="flex items-center justify-between">
-                <span>stages</span>
+                <span>stages (UI)</span>
                 <span className="mono text-paper-200">9</span>
               </div>
               <div className="flex items-center justify-between">
                 <span>verification</span>
-                <span className="mono text-accent-300">{level} · {LEVELS.find((l) => l.id === level)?.hint}</span>
+                <span className="mono text-accent-300">
+                  {level} · {LEVELS.find((l) => l.id === level)?.hint}
+                </span>
               </div>
               <div className="flex items-center justify-between">
-                <span>budget</span>
+                <span>budget (UI)</span>
                 <span className="mono text-paper-200">{budget}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span>estimated wall time</span>
-                <span className="mono text-paper-200">~2–4 min</span>
+                <span>metric sent</span>
+                <span className="mono text-paper-200">{metric}</span>
               </div>
             </div>
 
             <button
-              onClick={submit}
-              disabled={!prompt.trim()}
+              onClick={() => void submit()}
+              disabled={!prompt.trim() || submitting || busy}
               className="mt-4 flex h-[38px] items-center justify-center gap-2 rounded-sm border border-accent-500 bg-accent-500 text-[16px] font-semibold text-ink-950 transition hover:bg-accent-400 disabled:cursor-not-allowed disabled:border-ink-600 disabled:bg-ink-750 disabled:text-paper-500"
             >
-              Run Experiment
+              {submitting || busy ? 'Creating…' : 'Run Experiment'}
               <CornerDownLeft size={13} />
             </button>
             <p className="mono mt-2 text-center text-[12px] text-paper-500">⌘/Ctrl + Enter</p>

@@ -43,6 +43,8 @@ TRANSITIONS: Dict[str, Set[str]] = {
     ExperimentStatus.FAILED.value: {
         ExperimentStatus.RETRYING.value,
         ExperimentStatus.CANCELLED.value,
+        # Manual re-run: a FAILED experiment may be re-enqueued fresh.
+        ExperimentStatus.QUEUED.value,
     },
     ExperimentStatus.RETRYING.value: {
         ExperimentStatus.RUNNING.value,
@@ -158,8 +160,34 @@ async def delete_for_user(
 async def start_for_user(
     session: AsyncSession, experiment_id: UUID, owner_id: UUID
 ) -> Experiment:
-    """Enqueue a created experiment (``CREATED -> QUEUED``); else 409."""
+    """Enqueue an experiment; ``CREATED|FAILED -> QUEUED``; else 409.
+
+    A FAILED experiment is re-run as a fresh execution attempt: the previous
+    terminal state is archived under ``result_summary["history"]`` and the
+    error/result fields are reset, so the new run starts clean while the
+    previous attempt/outcome remains inspectable.
+    """
     experiment = await get_for_user(session, experiment_id, owner_id)
+    if experiment.status == ExperimentStatus.FAILED.value:
+        previous = dict(experiment.result_summary or {})
+        history = list(previous.get("history") or [])
+        history.append(
+            {
+                "status": ExperimentStatus.FAILED.value,
+                "error_detail": experiment.error_detail,
+                "completed_at": (
+                    experiment.completed_at.isoformat()
+                    if experiment.completed_at
+                    else None
+                ),
+                "result_summary": previous,
+            }
+        )
+        experiment.result_summary = {"history": history}
+        experiment.error_detail = None
+        experiment.retry_count = 0
+        experiment.completed_at = None
+        experiment.started_at = None
     return await transition_experiment(session, experiment, ExperimentStatus.QUEUED.value)
 
 

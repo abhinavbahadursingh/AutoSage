@@ -1,9 +1,7 @@
 import { useState } from 'react'
-import { Copy } from 'lucide-react'
 import { PageHeader } from '../components/layout/Sidebar'
 import { Badge } from '../components/ui/Badge'
 import { SectionTitle } from '../components/ui/Primitives'
-import { useStore } from '../store/context'
 import type { VerificationLevel } from '../lib/types'
 
 function Toggle({ on, onChange, label, detail }: { on: boolean; onChange: (v: boolean) => void; label: string; detail: string }) {
@@ -32,7 +30,6 @@ function Toggle({ on, onChange, label, detail }: { on: boolean; onChange: (v: bo
 }
 
 export function SettingsPage() {
-  const { toast } = useStore()
   const [level, setLevel] = useState<VerificationLevel>('strict')
   const [strictLeakage, setStrictLeakage] = useState(true)
   const [quarantine, setQuarantine] = useState(true)
@@ -47,7 +44,7 @@ export function SettingsPage() {
         subtitle="Workspace defaults applied to new experiments. Existing runs keep the settings they executed under."
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="grid max-w-[1080px] grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <section className="overflow-hidden rounded-md border border-ink-600 bg-ink-900">
             <SectionTitle>Defaults for new experiments</SectionTitle>
             <div className="px-4 py-3.5">
@@ -139,29 +136,19 @@ export function SettingsPage() {
           <section className="overflow-hidden rounded-md border border-ink-600 bg-ink-900">
             <SectionTitle>API access</SectionTitle>
             <div className="px-4 py-3.5">
-              <div className="label-xs mb-1.5">Workspace key</div>
+              <div className="label-xs mb-1.5">Auth mode</div>
               <div className="flex items-center gap-2">
                 <code className="mono min-w-0 flex-1 truncate rounded-sm border border-ink-700 bg-ink-850 px-2 py-1.5 text-[13.5px] text-paper-300">
-                  asg_live_9f2c••••••••••••••••4d71
+                  Bearer JWT · POST /auth/dev-token
                 </code>
-                <button
-                  onClick={() => {
-                    navigator.clipboard?.writeText('asg_live_9f2c_demo_key_4d71').catch(() => {})
-                    toast({ title: 'API key copied', detail: 'Rotated keys take effect within 60s', tone: 'success' })
-                  }}
-                  className="flex h-[30px] items-center gap-1.5 rounded-sm border border-ink-600 px-2.5 text-[14px] text-paper-300 transition hover:border-ink-400 hover:text-paper-100"
-                >
-                  <Copy size={12} /> Copy
-                </button>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2 text-[13.5px] text-paper-500">
-                <Badge tone="verify">scoped: experiments.write</Badge>
-                <Badge tone="dim">experiments.read</Badge>
-                <Badge tone="dim">evidence.read</Badge>
+                <Badge tone="verify">dev token mint</Badge>
+                <Badge tone="dim">Authorization header</Badge>
               </div>
               <p className="mt-3 text-[13.5px] leading-relaxed text-paper-500">
-                Keys authenticate CLI runs (<span className="mono text-paper-300">autosage run --key …</span>) and CI
-                verification jobs. Rotating invalidates outstanding runners after their current stage.
+                The UI obtains a backend JWT via <span className="mono text-paper-300">/api/v1/auth/dev-token</span>{' '}
+                and sends it as a Bearer token. Separate workspace API keys are not implemented in this backend.
               </p>
             </div>
           </section>

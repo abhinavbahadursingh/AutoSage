@@ -71,40 +71,31 @@ class Experiment(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    workspace = relationship("Workspace", back_populates="experiments", lazy="selectin")
+    workspace = relationship("Workspace", back_populates="experiments")
     pipelines = relationship(
-        "Pipeline", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "Pipeline", back_populates="experiment", cascade="all, delete-orphan")
     agent_executions = relationship(
         "AgentExecution",
         back_populates="experiment",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )
     decisions = relationship(
-        "Decision", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "Decision", back_populates="experiment", cascade="all, delete-orphan")
     verifications = relationship(
         "Verification",
         back_populates="experiment",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )
     ml_runs = relationship(
-        "MLRun", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "MLRun", back_populates="experiment", cascade="all, delete-orphan")
     artifacts = relationship(
-        "Artifact", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "Artifact", back_populates="experiment", cascade="all, delete-orphan")
     pipeline_runs = relationship(
-        "PipelineRun", back_populates="experiment", lazy="selectin"
-    )
+        "PipelineRun", back_populates="experiment")
     files = relationship(
-        "FileMetadata", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "FileMetadata", back_populates="experiment", cascade="all, delete-orphan")
     reproducibility_records = relationship(
-        "ReproducibilityRecord", back_populates="experiment", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "ReproducibilityRecord", back_populates="experiment", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Experiment id={self.id} status={self.status!r}>"

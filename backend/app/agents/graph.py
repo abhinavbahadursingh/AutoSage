@@ -57,8 +57,19 @@ def thread_id_for(experiment_id: str) -> str:
 
 def route_after_verification(state: ExperimentWorkflowState) -> RouteDecision:
     """Conditional edge: pass -> done, fail+attempts -> retry, else fail."""
-    if state.get("verification_passed"):
+    if state.get("verification_passed") and not state.get("verification_abstained"):
         return "complete"
+    if state.get("verification_abstained"):
+        # Abstain: retry if attempts remain, otherwise fail
+        attempt = int(state.get("attempt") or 0)
+        max_attempts = int(state.get("max_attempts") or 1)
+        if attempt < max_attempts:
+            log_with_context(
+                logger, logging.INFO, "workflow_verification_retry_abstain",
+                attempt=attempt, max_attempts=max_attempts
+            )
+            return "retry"
+        return "fail"
     attempt = int(state.get("attempt") or 0)
     max_attempts = int(state.get("max_attempts") or 1)
     if attempt < max_attempts:
@@ -80,14 +91,106 @@ def mark_failed(state: ExperimentWorkflowState) -> Dict[str, Any]:
     }
 
 
+def _publish_safe(fn, *args, **kwargs) -> None:
+    """Fire-and-forget WS event publish; never lets publish break a stage."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        logger.warning("stage_event_publish_failed", exc_info=True)
+
+
 def _wrap_node_with_observability(node_func, stage: str):
-    """Wrap a node function with timing and tracing."""
+    """Wrap a node function with timing, tracing, and live WS event publishing."""
     def wrapper(state: ExperimentWorkflowState):
         experiment_id = state.get("experiment_id") or get_experiment_id()
+        attempt = int(state.get("attempt") or 0)
+        exp_uuid = None
+        try:
+            from uuid import UUID
+
+            exp_uuid = UUID(str(experiment_id)) if experiment_id else None
+        except (ValueError, AttributeError, TypeError):
+            exp_uuid = None
+
+        def _pub_started() -> None:
+            if exp_uuid is None:
+                return
+            from app.services import event_publisher
+
+            event_publisher.publish_agent_started(exp_uuid, agent_name=stage, stage=stage, attempt=attempt)
+
+        def _pub_completed(result: Dict[str, Any]) -> None:
+            if exp_uuid is None:
+                return
+            from app.services import event_publisher
+
+            event_publisher.publish_agent_completed(
+                exp_uuid,
+                agent_name=stage,
+                stage=stage,
+                output_summary={
+                    k: result[k]
+                    for k in ("current_stage", "stages_completed", "events")
+                    if k in result
+                },
+            )
+
+        def _pub_failed(exc: Exception) -> None:
+            if exp_uuid is None:
+                return
+            from app.services import event_publisher
+
+            event_publisher.publish_agent_failed(
+                exp_uuid,
+                agent_name=stage,
+                stage=stage,
+                error=f"{type(exc).__name__}: {exc}",
+                error_type=type(exc).__name__,
+            )
+
         with TimingContext(f"workflow_node.{stage}", extra_fields={"experiment": experiment_id, "stage": stage}):
             with trace_operation(f"langgraph.node.{stage}", attributes={"stage": stage, "experiment_id": experiment_id or ""}):
                 log_with_context(logger, logging.INFO, "workflow_node_start", stage=stage, experiment=experiment_id)
-                result = node_func(state)
+                _publish_safe(_pub_started)
+                # Frontend maps ml.started/ml.completed onto the training/evaluation nodes.
+                if stage == "ml_experiment" and exp_uuid is not None:
+                    from app.services import event_publisher
+
+                    _publish_safe(
+                        event_publisher.publish_ml_started,
+                        experiment_id=exp_uuid,
+                        model_family=str((state.get("model_spec") or {}).get("family") or "gradient_boosting"),
+                        model_params=(state.get("model_spec") or {}).get("params") or {},
+                    )
+                try:
+                    result = node_func(state)
+                except Exception as exc:
+                    _publish_safe(_pub_failed, exc)
+                    raise
+                _publish_safe(_pub_completed, result)
+                if stage == "ml_experiment":
+                    from app.services import event_publisher
+
+                    ml_result = result.get("ml_result") or {}
+                    _publish_safe(
+                        event_publisher.publish_ml_completed,
+                        experiment_id=exp_uuid,
+                        success=True,
+                        metrics=ml_result,
+                    )
+                if stage == "verification":
+                    from app.services import event_publisher
+
+                    ver = result.get("verification") or {}
+                    _publish_safe(
+                        event_publisher.publish_verification_completed,
+                        experiment_id=exp_uuid,
+                        attempt=int(state.get("attempt") or 0) + 1,
+                        max_attempts=int(state.get("max_attempts") or 1),
+                        passed=bool(result.get("verification_passed")),
+                        metrics=ver if isinstance(ver, dict) else {},
+                        gate_decision="complete" if result.get("verification_passed") else "retry",
+                    )
                 log_with_context(logger, logging.INFO, "workflow_node_complete", stage=stage, experiment=experiment_id)
                 return result
     return wrapper

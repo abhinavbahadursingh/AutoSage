@@ -44,10 +44,14 @@ def test_initial_state_defaults() -> None:
 
 
 # -- nodes -----------------------------------------------------------------
-def test_nodes_fill_their_slots_in_order() -> None:
+def test_nodes_fill_their_slots_in_order(recall_experiment_config: dict) -> None:
     from typing import Any, Dict
 
-    state = _state()
+    state = _state(
+        config=recall_experiment_config,
+        primary_metric="recall",
+        compare_models=True,
+    )
     completed = []
 
     def visit(node) -> Dict[str, Any]:  # type: ignore[no-untyped-def]
@@ -62,7 +66,9 @@ def test_nodes_fill_their_slots_in_order() -> None:
     assert state["current_stage"] == "orchestrator"
 
     visit(discovery_node)
-    assert state["dataset_info"]["rows"] == 1000
+    # Discovery describes the dataset (LLM or heuristic); training reads the
+    # real CSV, so the reported shape is not what the gate depends on.
+    assert state["dataset_info"]["name"]
 
     visit(profiler_node)
     assert state["profile"]["task_type"] == "classification"
@@ -71,16 +77,93 @@ def test_nodes_fill_their_slots_in_order() -> None:
     assert state["preprocessing_spec"]["scaling"] == "standard"
 
     visit(model_selector_node)
-    assert state["model_spec"]["family"] == "gradient_boosting"
+    assert state["model_spec"]["candidates"], "a comparison run needs a shortlist"
+    assert state["model_spec"]["primary_metric"] == "recall"
 
     visit(experimenter_node)
     assert state["attempt"] == 1
-    assert state["ml_result"]["value"] == 0.87
+    # Measured, not predicted: real models trained, winner chosen on recall.
+    ml_result = state["ml_result"]
+    assert ml_result["primary_metric"] == "recall"
+    assert ml_result["primary_score"] is not None
+    assert ml_result["models_evaluated"] >= 2
+    assert ml_result["selected_model"]
+    for metric in ("accuracy", "precision", "recall", "f1"):
+        assert metric in ml_result["metrics"], f"{metric} must be measured"
 
     visit(verifier_node)
     assert state["verification_passed"] is True
+    assert state["verification"]["primary_metric"] == "recall"
     assert state["status"] == "COMPLETED"
     assert completed == STAGE_ORDER
+
+
+def test_nodes_abstain_when_nothing_was_measured() -> None:
+    """No dataset => no score; the gate abstains instead of inventing one."""
+    from typing import Any, Dict
+
+    state = _state()
+
+    def visit(node) -> Dict[str, Any]:  # type: ignore[no-untyped-def]
+        out = node(state)
+        state.update(out)
+        return out
+
+    for node in (
+        orchestrator_node,
+        discovery_node,
+        profiler_node,
+        preprocessor_node,
+        model_selector_node,
+        experimenter_node,
+        verifier_node,
+    ):
+        visit(node)
+
+    assert state["ml_result"]["primary_metric"] == state["primary_metric"]
+    assert state["ml_result"]["selected_model"] is None
+    assert state["verification"]["abstained"] is True
+    assert state["verification_passed"] is False
+
+
+def test_metric_propagates_from_request_config() -> None:
+    state = initial_workflow_state(
+        experiment_id="e",
+        workspace_id="w",
+        max_attempts=2,
+        experiment_config={"metric": "recall", "compare_models": "true"},
+    )
+    assert state["primary_metric"] == "recall"
+    assert state["compare_models"] is True
+
+    default = initial_workflow_state(experiment_id="e", workspace_id="w", max_attempts=2)
+    assert default["primary_metric"] == "accuracy"
+    assert default["compare_models"] is False
+
+
+def test_selection_uses_requested_metric_not_accuracy(recall_experiment_config: dict) -> None:
+    """The winner is the best recall, even when another model leads on accuracy."""
+    from app.agents.experimenter import experimenter_node
+
+    state = _state(
+        config=recall_experiment_config,
+        primary_metric="recall",
+        compare_models=True,
+        dataset_info={"name": "churn_small.csv", "target_column": "Churn"},
+        profile={"task_type": "classification", "target_column": "Churn"},
+        model_spec={
+            "family": "gradient_boosting",
+            "params": {},
+            "candidates": ["random_forest", "gradient_boosting", "logistic_regression"],
+        },
+    )
+    state.update(experimenter_node(state))
+
+    comparison = {e["model"]: e for e in state["ml_result"]["model_comparison"]}
+    assert len(comparison) >= 2
+    best_recall = max(comparison.values(), key=lambda e: e["score"])
+    assert state["ml_result"]["selected_model"] == best_recall["model"]
+    assert state["ml_result"]["metrics"]["recall"] == best_recall["metrics"]["recall"]
 
 
 @pytest.mark.parametrize(
@@ -146,13 +229,16 @@ def test_legacy_graph_alias_still_builds() -> None:
 
 
 # -- checkpointing + runner ----------------------------------------------------
-def test_checkpoint_records_lifecycle() -> None:
+def test_checkpoint_records_lifecycle(recall_experiment_config: dict) -> None:
     saver = MemorySaver()
     graph = build_experiment_graph(checkpointer=saver)
     config = {"configurable": {"thread_id": thread_id_for("ckpt-1")}}
     final = graph.invoke(
         initial_workflow_state(
-            experiment_id="ckpt-1", workspace_id="w", max_attempts=2
+            experiment_id="ckpt-1",
+            workspace_id="w",
+            max_attempts=2,
+            experiment_config=recall_experiment_config,
         ),
         config=config,
     )
@@ -173,14 +259,19 @@ def test_get_snapshot_empty_without_history() -> None:
     assert get_workflow_snapshot(graph, "never-ran") == {}
 
 
-def test_runner_happy_path_is_json_safe() -> None:
+def test_runner_happy_path_is_json_safe(recall_experiment_config: dict) -> None:
     import json
 
     final = run_experiment_workflow(
-        experiment_id="run-1", workspace_id="w", max_attempts=2
+        experiment_id="run-1",
+        workspace_id="w",
+        max_attempts=2,
+        experiment_config=recall_experiment_config,
     )
     assert final["status"] == "COMPLETED"
     assert final["attempt"] == 1
+    assert final["primary_metric"] == "recall"
+    assert final["ml_result"]["selected_model"]
     json.dumps(final)  # must survive the json result backend
 
 

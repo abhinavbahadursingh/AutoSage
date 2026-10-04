@@ -45,6 +45,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.extra_headers = extra_headers or {}
         self._client = client
         self._owns_client = client is None
+        self._client_loop_id: Optional[int] = None
         self.timeout = timeout if timeout is not None else settings.LLM_TIMEOUT_SECONDS
 
     def is_configured(self) -> bool:
@@ -65,11 +66,30 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         return headers
 
     async def _get_client(self) -> httpx.AsyncClient:
+        # Recreate the HTTP client when it was built on a different (possibly
+        # now-closed) event loop, so a reused cached client never trips
+        # "Event loop is closed" when the loop it belonged to ended.
+        try:
+            import asyncio
+
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            loop_id = None
+        if self._client is not None and (
+            loop_id is None or self._client_loop_id is None or self._client_loop_id != loop_id
+        ):
+            if self._owns_client:
+                try:
+                    await self._client.aclose()
+                except Exception:
+                    pass
+            self._client = None
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=httpx.Timeout(self.timeout),
             )
+            self._client_loop_id = loop_id
         return self._client
 
     async def generate(self, request: LLMRequest) -> LLMResponse:

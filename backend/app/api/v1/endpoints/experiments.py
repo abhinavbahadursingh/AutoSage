@@ -105,6 +105,11 @@ async def delete_experiment(
     response_model=ExperimentRead,
     summary="Enqueue my experiment (CREATED -> QUEUED)",
 )
+@router.post(
+    "/{experiment_id}/run",
+    response_model=ExperimentRead,
+    summary="Enqueue my experiment (CREATED -> QUEUED)",
+)
 async def start_experiment(
     experiment_id: UUID, user: CurrentUser, session: DbSession
 ) -> ExperimentRead:

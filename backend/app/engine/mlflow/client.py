@@ -177,6 +177,11 @@ def get_mlflow_tracker(
     """Get or create global MLflow tracker."""
     global _mlflow_tracker
     if _mlflow_tracker is None:
+        status = mlflow_status()
+        if not status["available"]:
+            raise RuntimeError(
+                f"MLflow tracking unavailable at {status['tracking_uri']}: {status['error']}"
+            )
         _mlflow_tracker = MLflowTracker(tracking_uri, experiment_name)
     return _mlflow_tracker
 
@@ -205,13 +210,50 @@ def mlflow_run_context(
         tracker.end_run(status="FINISHED")
 
 
+def mlflow_status(timeout_sec: float = 3.0) -> Dict[str, Any]:
+    """Bounded reachability check for the configured MLflow server.
+
+    Returns ``{"available": bool, "tracking_uri": str, "error": Optional[str]}``
+    and never hangs: the probe runs in a helper thread bounded by ``timeout_sec``.
+    """
+    def _probe() -> Optional[str]:
+        try:
+            client = MlflowClient(tracking_uri=settings.MLFLOW_TRACKING_URI)
+            client.get_experiment_by_name(
+                getattr(settings, "MLFLOW_EXPERIMENT_NAME", "autosage_default")
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            return f"{type(exc).__name__}: {exc}"
+
+    import threading
+
+    box: Dict[str, Any] = {}
+
+    def _probe() -> None:
+        try:
+            client = MlflowClient(tracking_uri=settings.MLFLOW_TRACKING_URI)
+            client.get_experiment_by_name(
+                getattr(settings, "MLFLOW_EXPERIMENT_NAME", "autosage_default")
+            )
+            box["err"] = None
+        except Exception as exc:  # noqa: BLE001
+            box["err"] = f"{type(exc).__name__}: {exc}"
+
+    th = threading.Thread(target=_probe, daemon=True)
+    th.start()
+    th.join(timeout=timeout_sec)
+    if th.is_alive():
+        msg = f"MLflow probe timed out after {timeout_sec}s"
+        logger.warning("mlflow_unavailable", extra={"error": msg})
+        return {"available": False, "tracking_uri": settings.MLFLOW_TRACKING_URI, "error": msg}
+    err = box.get("err")
+    if err is None:
+        return {"available": True, "tracking_uri": settings.MLFLOW_TRACKING_URI, "error": None}
+    logger.warning("mlflow_unavailable", extra={"error": err})
+    return {"available": False, "tracking_uri": settings.MLFLOW_TRACKING_URI, "error": err}
+
+
 def is_mlflow_available() -> bool:
     """Check if MLflow tracking is configured and reachable."""
-    try:
-        client = MlflowClient(tracking_uri=settings.MLFLOW_TRACKING_URI)
-        # Try to get experiment - this works for both server and file-based backends
-        client.get_experiment_by_name(getattr(settings, "MLFLOW_EXPERIMENT_NAME", "autosage_default"))
-        return True
-    except Exception as e:
-        logger.warning("mlflow_unavailable", extra={"error": str(e)})
-        return False
+    return bool(mlflow_status()["available"])

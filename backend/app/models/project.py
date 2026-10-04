@@ -20,4 +20,4 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    owner = relationship("User", back_populates="projects", lazy="selectin")
+    owner = relationship("User", back_populates="projects")

@@ -39,10 +39,9 @@ class Decision(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    experiment = relationship("Experiment", back_populates="decisions", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="decisions")
     agent_execution = relationship(
-        "AgentExecution", back_populates="decisions", lazy="selectin"
-    )
+        "AgentExecution", back_populates="decisions")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Decision id={self.id} type={self.decision_type!r}>"

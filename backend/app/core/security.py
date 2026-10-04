@@ -1,4 +1,4 @@
-﻿"""JWT helpers — Phase 2 authentication with Supabase Auth / Better Auth.
+"""JWT helpers — Phase 2 authentication with Supabase Auth / Better Auth.
 
 Supports two auth providers:
 1. Supabase Auth: RS256 JWTs verified via JWKS (keys rotated automatically)

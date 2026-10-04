@@ -46,9 +46,9 @@ class Artifact(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    experiment = relationship("Experiment", back_populates="artifacts", lazy="selectin")
-    ml_run = relationship("MLRun", back_populates="artifacts", lazy="selectin")
-    pipeline = relationship("Pipeline", back_populates="artifacts", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="artifacts")
+    ml_run = relationship("MLRun", back_populates="artifacts")
+    pipeline = relationship("Pipeline", back_populates="artifacts")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Artifact id={self.id} kind={self.kind!r} name={self.name!r}>"

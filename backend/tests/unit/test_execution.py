@@ -18,8 +18,13 @@ def test_backoff_doubles_with_cap() -> None:
 
 
 def test_backoff_defaults_come_from_settings() -> None:
-    assert compute_retry_countdown(0) == 60
-    assert compute_retry_countdown(100) == 3600
+    # tests/conftest.py caps the backoff so eager retries never sleep; the
+    # contract under test is that the defaults are read from settings, not
+    # hard-coded here.
+    from app.core.config import settings
+
+    assert compute_retry_countdown(0) == settings.CELERY_RETRY_BACKOFF_BASE
+    assert compute_retry_countdown(100) == settings.CELERY_RETRY_BACKOFF_MAX
 
 
 def test_task_registration_and_routing() -> None:

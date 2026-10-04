@@ -38,17 +38,14 @@ class MLRun(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    experiment = relationship("Experiment", back_populates="ml_runs", lazy="selectin")
-    artifacts = relationship("Artifact", back_populates="ml_run", lazy="selectin")
+    experiment = relationship("Experiment", back_populates="ml_runs")
+    artifacts = relationship("Artifact", back_populates="ml_run")
     verifications = relationship(
-        "Verification", back_populates="ml_run", lazy="selectin"
-    )
+        "Verification", back_populates="ml_run")
     files = relationship(
-        "FileMetadata", back_populates="ml_run", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "FileMetadata", back_populates="ml_run", cascade="all, delete-orphan")
     reproducibility_records = relationship(
-        "ReproducibilityRecord", back_populates="ml_run", cascade="all, delete-orphan", lazy="selectin"
-    )
+        "ReproducibilityRecord", back_populates="ml_run", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<MLRun id={self.id} status={self.status!r}>"

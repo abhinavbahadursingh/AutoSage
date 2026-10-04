@@ -1,0 +1,105 @@
+@import '../index.css';
+@import './fonts/fonts.css';
+
+html,
+body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--color-ink-900);
+}
+
+#root {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+}
+
+/* Frame determinism: nothing may advance on the wall clock while we capture. */
+* {
+  transition-duration: 0s !important;
+}
+
+.brag-band {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 110px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  padding: 0 56px;
+  background: linear-gradient(180deg, rgba(8, 9, 10, 0.94) 0%, rgba(8, 9, 10, 0.78) 62%, rgba(8, 9, 10, 0) 100%);
+  pointer-events: none;
+}
+
+.brag-caption {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-family: var(--font-sans);
+  font-size: 41px;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--color-paper-50);
+  white-space: nowrap;
+}
+
+.brag-caption .rule {
+  width: 34px;
+  height: 2px;
+  background: var(--color-accent-500);
+  flex: none;
+}
+
+.brag-caption .word {
+  display: inline-block;
+}
+
+.brag-band .kicker {
+  position: absolute;
+  top: 14px;
+  left: 56px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-paper-500);
+}
+
+.brag-scene {
+  position: absolute;
+  left: 0;
+  width: 1920px;
+  overflow: hidden;
+}
+
+.brag-camera {
+  position: relative;
+  width: 1920px;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.brag-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.brag-cursor {
+  position: absolute;
+  width: 26px;
+  height: 34px;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.65));
+}
+
+.brag-claims {
+  position: absolute;
+  right: 40px;
+  bottom: 36px;
+  width: 660px;
+  z-index: 50;
+}

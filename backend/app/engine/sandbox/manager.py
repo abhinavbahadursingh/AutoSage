@@ -126,6 +126,7 @@ class SandboxManager:
         "nproc": (50, 100),        # Process limit
         "fsize": (100 * 1024 * 1024, 100 * 1024 * 1024),  # Max file size 100MB
     }
+    DEFAULT_DOCKER_TIMEOUT = 30.0  # seconds for Docker API calls
 
     def __init__(
         self,
@@ -141,6 +142,7 @@ class SandboxManager:
         ulimits: Optional[Dict[str, tuple]] = None,
         seccomp_profile: Optional[str] = None,
         readonly_rootfs: bool = True,
+        docker_timeout: float = DEFAULT_DOCKER_TIMEOUT,
     ):
         self.image_tag = image_tag
         self.dockerfile_path = dockerfile_path or str(
@@ -156,18 +158,53 @@ class SandboxManager:
         self.ulimits = ulimits or self.DEFAULT_ULIMITS
         self.seccomp_profile = seccomp_profile
         self.readonly_rootfs = readonly_rootfs
+        self.docker_timeout = docker_timeout
         self._client: Optional[docker.DockerClient] = None
+        self._client_lock = asyncio.Lock()
 
     @property
     def client(self) -> docker.DockerClient:
-        """Lazily initialize Docker client."""
+        """Lazily initialize Docker client with timeout configuration."""
         if self._client is None:
             try:
-                self._client = docker.from_env()
+                # Create client with explicit timeout for Docker Desktop / remote daemons
+                self._client = docker.from_env(timeout=self.docker_timeout)
+                # Test connection with ping
                 self._client.ping()
+                logger.info("docker_client_initialized", extra={"timeout": self.docker_timeout})
             except DockerException as e:
+                self._client = None
                 raise SandboxError(f"Docker daemon not available: {e}") from e
         return self._client
+
+    def is_available(self, timeout_sec: float = 10.0) -> Tuple[bool, Optional[str]]:
+        """Bounded availability probe so a missing/held Docker daemon can't hang the run.
+
+        Increased default timeout to 10s to accommodate slow Docker Desktop starts.
+        """
+        import threading
+
+        box: Dict[str, Any] = {}
+
+        def _probe() -> None:
+            try:
+                # Create a fresh client for the probe to avoid stale connections
+                probe_client = docker.from_env(timeout=min(timeout_sec, self.docker_timeout))
+                probe_client.ping()
+                probe_client.close()
+                box["err"] = None
+            except Exception as exc:  # noqa: BLE001
+                box["err"] = f"{type(exc).__name__}: {exc}"
+
+        th = threading.Thread(target=_probe, daemon=True)
+        th.start()
+        th.join(timeout=timeout_sec)
+        if th.is_alive():
+            return False, f"Docker daemon ping timed out after {timeout_sec}s"
+        err = box.get("err")
+        if err is None:
+            return True, None
+        return False, err
 
     def build_image(self, force_rebuild: bool = False) -> str:
         """Build the runner Docker image.
@@ -190,6 +227,7 @@ class SandboxManager:
             logger.info("sandbox_building_image", extra={"image": self.image_tag})
             self.client.images.build(
                 path=self.dockerfile_path,
+                dockerfile="Dockerfile.runner",
                 tag=self.image_tag,
                 rm=True,
                 forcerm=True,
@@ -403,6 +441,10 @@ class SandboxManager:
                 workspace = None
 
                 try:
+                    available, docker_err = self.is_available()
+                    if not available:
+                        raise SandboxError(f"Docker daemon not available: {docker_err}")
+
                     # Ensure image exists
                     with TimingContext("sandbox_build_image", extra_fields={"job_id": job_id, "experiment": experiment_id}):
                         self.build_image()
@@ -425,8 +467,8 @@ class SandboxManager:
                         env["MLFLOW_RUN_ID"] = mlflow_run_id
 
                     # Run container
-                    loop = asyncio.get_event_loop()
                     with TimingContext("sandbox_run_container", extra_fields={"job_id": job_id, "experiment": experiment_id}):
+                        loop = asyncio.get_running_loop()
                         exit_code, stdout, stderr = await loop.run_in_executor(
                             None, self._run_container, workspace, "train.py", env
                         )
@@ -557,6 +599,7 @@ def get_sandbox_manager() -> SandboxManager:
             mlflow_experiment_name=getattr(settings, "MLFLOW_EXPERIMENT_NAME", None),
             pids_limit=getattr(settings, "SANDBOX_PIDS_LIMIT", 100),
             readonly_rootfs=getattr(settings, "SANDBOX_READONLY_ROOTFS", True),
+            docker_timeout=getattr(settings, "SANDBOX_DOCKER_TIMEOUT", 30.0),
         )
     return _sandbox_manager
 

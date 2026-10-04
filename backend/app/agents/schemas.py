@@ -5,7 +5,7 @@ Agents return these models (never free-form dicts). LangGraph nodes then
 """
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,13 +77,18 @@ class MLExperimentOutput(AgentOutput):
 
 
 class VerificationOutput(AgentOutput):
-    """Verification Agent — empirical gate decision + check list."""
+    """Verification Agent - empirical gate decision + check list."""
 
     checks: List[str] = Field(default_factory=list)
     passed: bool = False
+    abstained: bool = Field(default=False, description="True when verification abstained due to low confidence/unreliable evidence")
     failures: List[str] = Field(default_factory=list)
     summary: str = ""
     attempt: int = Field(ge=0, default=0)
+    static_checks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="AST/security, data-leakage and metric-sanity gate results",
+    )
 
 
 class OrchestrationPlanOutput(AgentOutput):

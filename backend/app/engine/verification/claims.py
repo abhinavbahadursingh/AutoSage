@@ -34,6 +34,7 @@ class ClaimStatus(str, Enum):
     CONFLICT = "CONFLICT"          # Evidence contradicts the claim
     REJECTED = "REJECTED"          # Claim is false/impossible
     UNVERIFIED = "UNVERIFIED"      # Insufficient evidence either way
+    ABSTAIN = "ABSTAIN"            # Insufficient confidence or unreliable evidence
 
 
 @dataclass

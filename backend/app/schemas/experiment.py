@@ -80,6 +80,10 @@ def _validate_config(v: Dict[str, Any]) -> Dict[str, Any]:
         v["model_family"] = validate_model_family(str(v["model_family"]))
     if "metric" in v:
         v["metric"] = validate_metric(str(v["metric"]))
+    if "primary_metric" in v:
+        v["primary_metric"] = validate_metric(str(v["primary_metric"]))
+    if "evaluation_metric" in v and v.get("evaluation_metric"):
+        v["evaluation_metric"] = validate_metric(str(v["evaluation_metric"]))
     if "task_type" in v:
         v["task_type"] = validate_task_type(str(v["task_type"]))
 
@@ -89,6 +93,9 @@ def _validate_config(v: Dict[str, Any]) -> Dict[str, Any]:
         "dataset_path", "dataset_name", "target_column",
         "model_name", "random_seed", "random_state",
         "mock_fail_stage",
+        # Objective of the run: which metric to optimize, and whether to
+        # compare several models. Both are threaded into the workflow state.
+        "primary_metric", "compare_models",
         # Frontend formulation form (experiment intent/context)
         "prompt", "dataset", "evaluation_metric", "split_strategy",
         "imbalance_handling", "source",
@@ -104,7 +111,30 @@ def _validate_config(v: Dict[str, Any]) -> Dict[str, Any]:
     if "model_params" in v and not isinstance(v["model_params"], dict):
         raise ValueError("model_params must be a dictionary")
 
+    # Normalize the objective so exactly one spelling reaches the pipeline:
+    # an explicit primary_metric wins, then metric, then the UI's
+    # evaluation_metric label. Compare intent is always a real boolean.
+    primary = next(
+        (v[key] for key in ("primary_metric", "metric", "evaluation_metric") if v.get(key)),
+        None,
+    )
+    if primary:
+        v["primary_metric"] = validate_metric(str(primary))
+    if "compare_models" in v:
+        v["compare_models"] = parse_compare_models(v["compare_models"])
+
     return v
+
+
+def parse_compare_models(v: Any) -> bool:
+    """Coerce the compare-models intent to a bool (form/JSON tolerant)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return False
 
 
 class ExperimentCreate(BaseModel):

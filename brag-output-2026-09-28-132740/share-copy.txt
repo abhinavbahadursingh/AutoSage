@@ -1,0 +1,1 @@
+AutoSage turns one prompt into a nine-stage AutoML run — eight specialized agents do the work, and a verifier independently recomputes every metric and claim before the pipeline is frozen. You watch the whole thing happen, then keep the model, the numbers and the audit trail.

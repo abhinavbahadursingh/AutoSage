@@ -1,0 +1,20 @@
+ 
+ -------------- celery@AbhinavSingh v5.6.3 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-10-10.0.26200-SP0 2026-10-03 13:00:04
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         autosage_worker:0x20a291f8310
+- ** ---------- .> transport:   sqla+sqlite:///D:/autoSage/data/celery_broker.db
+- ** ---------- .> results:     sqlite:///D:/autoSage/data/celery_results.db
+- *** --- * --- .> concurrency: 16 (solo)
+-- ******* ---- .> task events: ON
+--- ***** ----- 
+ -------------- [queues]
+                .> experiments      exchange=experiments(direct) key=experiments
+                
+
+[tasks]
+  . experiments.run_experiment
+  . tasks.execute_pipeline_run
+

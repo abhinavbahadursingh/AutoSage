@@ -1,45 +1,68 @@
+import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../../store/context'
+import { DUR, EASE } from '../../lib/animConfig'
 
-const toneMap = {
-  neutral: 'border-ink-500',
-  success: 'border-verify-500',
-  warn: 'border-warn-500',
-  error: 'border-conflict-500',
-} as const
-
-const dotMap = {
-  neutral: 'bg-paper-300',
-  success: 'bg-verify-500',
-  warn: 'bg-warn-500',
-  error: 'bg-conflict-500',
-} as const
+const TONE_STYLES: Record<string, { border: string; dot: string }> = {
+  neutral: { border: 'var(--as-border)', dot: 'var(--as-text-2)' },
+  success: { border: 'color-mix(in oklch, var(--as-verify) 40%, transparent)', dot: 'var(--as-verify)' },
+  warn:    { border: 'color-mix(in oklch, var(--as-warn) 40%, transparent)',   dot: 'var(--as-warn)' },
+  error:   { border: 'color-mix(in oklch, var(--as-error) 40%, transparent)',  dot: 'var(--as-error)' },
+}
 
 export function ToastHost() {
   const { toasts, dismissToast } = useStore()
-  if (toasts.length === 0) return null
+
   return (
-    <div className="pointer-events-none fixed top-3 right-4 z-50 flex w-[320px] flex-col gap-2">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`anim-toast pointer-events-auto rounded-md border ${toneMap[t.tone]} bg-ink-800/95 px-3 py-2.5 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.9)] backdrop-blur-[2px]`}
-        >
-          <div className="flex items-start gap-2">
-            <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dotMap[t.tone]}`} />
-            <div className="min-w-0 flex-1">
-              <div className="text-[15.5px] font-medium text-paper-100">{t.title}</div>
-              {t.detail && <div className="mt-0.5 text-[14px] leading-snug text-paper-400">{t.detail}</div>}
-            </div>
-            <button
-              onClick={() => dismissToast(t.id)}
-              className="-mr-1 -mt-0.5 px-1 text-[18.5px] leading-none text-paper-500 transition hover:text-paper-200"
-              aria-label="Dismiss"
+    <div className="pointer-events-none fixed top-4 right-4 z-50 flex w-[330px] flex-col gap-2.5">
+      <AnimatePresence>
+        {toasts.map((t) => {
+          const { border, dot } = TONE_STYLES[t.tone] ?? TONE_STYLES.neutral
+          return (
+            <motion.div
+              key={t.id}
+              layout
+              initial={{ opacity: 0, x: 60, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, x: 40, filter: 'blur(4px)' }}
+              transition={{ duration: DUR.fast, ease: EASE.out }}
+              className="pointer-events-auto rounded-2xl border px-4 py-3 shadow-xl"
+              style={{
+                background: 'var(--as-glass-bg-2)',
+                borderColor: border,
+                backdropFilter: 'blur(24px) saturate(160%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(160%)',
+                boxShadow: '0 16px 48px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.05) inset',
+              }}
             >
-              ×
-            </button>
-          </div>
-        </div>
-      ))}
+              <div className="flex items-start gap-2.5">
+                {/* Status dot */}
+                <span
+                  className="mt-[6px] h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ background: dot, boxShadow: `0 0 8px ${dot}` }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14.5px] font-semibold" style={{ color: 'var(--as-text)' }}>
+                    {t.title}
+                  </div>
+                  {t.detail && (
+                    <div className="mt-0.5 text-[13px] leading-snug" style={{ color: 'var(--as-text-2)' }}>
+                      {t.detail}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => dismissToast(t.id)}
+                  className="shrink-0 -mt-0.5 -mr-1 flex h-6 w-6 items-center justify-center rounded-lg text-[16px] leading-none transition-colors hover:bg-[var(--as-glass-bg)]"
+                  style={{ color: 'var(--as-text-3)' }}
+                  aria-label="Dismiss notification"
+                >
+                  ×
+                </button>
+              </div>
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
     </div>
   )
 }

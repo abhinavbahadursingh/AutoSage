@@ -94,11 +94,11 @@ class FileMetadata(Base):
     )
     
     # Relationships
-    owner = relationship("User", back_populates="files", lazy="selectin")
-    workspace = relationship("Workspace", back_populates="files", lazy="selectin")
-    dataset = relationship("Dataset", back_populates="files", lazy="selectin")
-    experiment = relationship("Experiment", back_populates="files", lazy="selectin")
-    ml_run = relationship("MLRun", back_populates="files", lazy="selectin")
+    owner = relationship("User", back_populates="files")
+    workspace = relationship("Workspace", back_populates="files")
+    dataset = relationship("Dataset", back_populates="files")
+    experiment = relationship("Experiment", back_populates="files")
+    ml_run = relationship("MLRun", back_populates="files")
 
     def __repr__(self) -> str:
         return f"<FileMetadata id={self.id} name={self.original_filename!r} category={self.category!r}>"

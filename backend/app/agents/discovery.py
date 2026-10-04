@@ -30,7 +30,7 @@ class DiscoveryAgent(BaseAgent):
         user = (
             "Describe the dataset for this experiment.\n"
             f"experiment_id={state.get('experiment_id')}\n"
-            f"config={state.get('dataset_info') or {}}"
+            f"config={state.get('config') or {}}"
         )
         return _SYSTEM, user
 
