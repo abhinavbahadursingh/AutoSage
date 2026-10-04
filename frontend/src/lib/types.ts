@@ -133,3 +133,22 @@ export interface ToastMsg {
   detail?: string
   tone: 'neutral' | 'success' | 'warn' | 'error'
 }
+
+export interface EvidenceClaim {
+  id: string
+  claim: string
+  source: string
+  agent: string
+  experiment: string
+  status: VerificationStatus
+  confidence: number
+  supporting: string[]
+  conflicting?: string[]
+  timestamp: string
+}
+
+export interface ExperimentResult {
+  bestPipeline: string
+  reproducibility: Array<{ label: string; value: string }>
+  pipelineSteps: Array<{ op: string; detail: string }>
+}
