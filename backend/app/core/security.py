@@ -58,13 +58,24 @@ async def _fetch_jwks() -> Dict[str, Any]:
             response.raise_for_status()
             jwks = response.json()
             
-            # Convert to kid -> public key mapping
+            # Convert to kid -> public key mapping.
+            # Supabase projects may sign with RSA (RS256) or EC (ES256) keys;
+            # parse each JWK according to its "kty" so both verify.
             keys = {}
             for key in jwks.get("keys", []):
                 kid = key.get("kid")
-                if kid:
+                if not kid:
+                    continue
+                kty = key.get("kty", "")
+                if kty == "RSA":
                     public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
-                    keys[kid] = public_key
+                elif kty == "EC":
+                    public_key = jwt.algorithms.ECAlgorithm.from_jwk(key)
+                elif kty == "OKP":
+                    public_key = jwt.algorithms.OKPAlgorithm.from_jwk(key)
+                else:
+                    continue
+                keys[kid] = public_key
             
             _jwks_cache = {"keys": keys, "fetched_at": now}
             return keys
