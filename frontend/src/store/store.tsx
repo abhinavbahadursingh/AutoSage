@@ -11,6 +11,7 @@ import {
   ApiError,
   ensureToken,
   experimentWsUrl,
+  getToken,
   setToken,
   setCachedUser,
   type ApiUser,
@@ -194,10 +195,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [],
   )
 
-  // Bootstrap auth + initial data
+  // Bootstrap auth + initial data.
+  // Production with no stored token: bootstrapAuth throws "sign in required"
+  // (it never calls the dev-token endpoint). That is a normal logged-out
+  // state — set the auth error so ProtectedRoute redirects to /login, but
+  // skip the error toast (the Login page explains the next step).
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      const hadToken = getToken() !== null
       try {
         const u = await api.bootstrapAuth()
         if (cancelled) return
@@ -210,7 +216,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         const msg = err instanceof ApiError ? err.message : 'Authentication failed'
         setAuthError(msg)
-        toast({ title: 'Backend auth failed', detail: msg, tone: 'error' })
+        const quietLoggedOut =
+          err instanceof ApiError && err.status === 401 && !hadToken
+        if (!quietLoggedOut) {
+          toast({ title: 'Backend auth failed', detail: msg, tone: 'error' })
+        }
       } finally {
         if (!cancelled) setAuthReady(true)
       }
@@ -393,6 +403,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } catch {
           /* WS optional — polling still works */
         }
+      }).catch(() => {
+        /* No token (logged out) or WS setup failed — polling still works */
       })
     },
     [applyRaw, closeWs, pushLog],

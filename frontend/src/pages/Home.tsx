@@ -117,7 +117,10 @@ export function HomePage() {
   const { visible, scrolled } = useNavScroll()
 
   // Direct demo login from the home page: already signed in → open the
-  // workspace; otherwise mint a guest session inline, no /login detour.
+  // workspace; otherwise create a guest session inline, no /login detour.
+  // Local dev mints via the backend dev-token endpoint; production uses the
+  // real auth mechanism (Supabase anonymous sign-in). When production has
+  // no IdP configured, route to the Login page instead of failing here.
   const demoLogin = async () => {
     if (user) {
       navigate('/workspace')
@@ -134,6 +137,9 @@ export function HomePage() {
       const msg = err instanceof Error ? err.message : 'Demo login failed'
       setAuthError(msg)
       toast({ title: 'Demo login failed', detail: msg, tone: 'error' })
+      if (/not configured/i.test(msg)) {
+        navigate('/login')
+      }
     } finally {
       setLoginBusy(false)
     }
@@ -594,7 +600,7 @@ export function HomePage() {
 
             <RevealBlock delay={0.2}>
               <p className="mono mt-5 text-center text-[12.5px]" style={{ color: 'var(--as-text-3)' }}>
-                {STAGE_META.length} stages · JWT via /auth/dev-token · POST /experiments
+                {STAGE_META.length} stages · Bearer JWT · POST /experiments
               </p>
             </RevealBlock>
           </div>

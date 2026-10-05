@@ -120,8 +120,8 @@ function NavItemRow({
       title={collapsed ? item.label : undefined}
       onClick={onNavigate}
       className={({ isActive }) =>
-        `group relative flex h-[34px] items-center gap-2.5 rounded-xl px-2.5 text-[14.5px] font-medium transition-all duration-150 ${
-          collapsed ? 'justify-center px-0 w-[34px] mx-auto' : ''
+        `group relative flex h-[34px] items-center gap-2.5 rounded-xl px-2.5 text-[14.5px] font-medium transition-all duration-150 overflow-visible ${
+          collapsed ? 'justify-center px-0 w-[36px] mx-auto' : ''
         } ${
           isActive
             ? 'shadow-[0_0_12px_var(--as-accent-glow)]'
@@ -137,12 +137,12 @@ function NavItemRow({
     >
       {({ isActive }) => (
         <>
-          <span className="relative shrink-0">
+          <span className="relative shrink-0 flex items-center justify-center w-[18px] h-[18px]">
             <Icon
-              size={14}
+              size={16}
               strokeWidth={isActive ? 2 : 1.6}
               className={`transition-colors duration-150 ${
-                isActive ? 'text-accent-400' : 'text-paper-500 group-hover:text-accent-300'
+                isActive ? 'text-accent-400' : 'text-paper-400 group-hover:text-accent-300'
               }`}
             />
             {collapsed && count != null && count > 0 && (

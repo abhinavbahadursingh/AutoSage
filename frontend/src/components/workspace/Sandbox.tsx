@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   RotateCcw,
   CheckCircle,
@@ -15,6 +15,8 @@ import {
   Maximize2,
   Minimize2,
   Download,
+  GripVertical,
+  GripHorizontal,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 
@@ -304,6 +306,15 @@ function highlightPython(code: string): string {
     .replace(/\b([a-z_][a-zA-Z0-9_]*)\s*(?=\()/g, '<span class="token-function">$1</span>')
 }
 
+interface PanelSizes {
+  editor: number
+  terminal: number
+  results: number
+}
+
+const DEFAULT_SIZES: PanelSizes = { editor: 35, terminal: 45, results: 20 }
+const MIN_PANEL_SIZE = 15
+
 export function Sandbox() {
   const [status, setStatus] = useState<SandboxStatus>({ available: false, error: 'not probed' })
   const [isRunning, setIsRunning] = useState(false)
@@ -313,8 +324,11 @@ export function Sandbox() {
   const [activeTemplate, setActiveTemplate] = useState<'Random Forest' | 'XGBoost' | 'LightGBM' | 'Neural Net (PyTorch)' | 'Blank'>('Random Forest')
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [layout, setLayout] = useState<'split' | 'editor' | 'terminal'>('split')
+  const [sizes, setSizes] = useState<PanelSizes>(DEFAULT_SIZES)
+  const [dragging, setDragging] = useState<'editor-terminal' | 'terminal-results' | null>(null)
   const terminalRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchStatus()
@@ -409,8 +423,61 @@ export function Sandbox() {
 
   const highlightedScript = useMemo(() => highlightPython(script), [script])
 
+  const handleDragStart = useCallback((e: React.MouseEvent, type: 'editor-terminal' | 'terminal-results') => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragging(type)
+    document.body.style.cursor = type === 'editor-terminal' ? 'col-resize' : 'row-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  const handleDragMove = useCallback((e: MouseEvent) => {
+    if (!dragging || !containerRef.current) return
+    const container = containerRef.current.getBoundingClientRect()
+    const totalWidth = container.width
+    const totalHeight = container.height
+
+    if (dragging === 'editor-terminal') {
+      const editorWidth = e.clientX - container.left
+      const editorPercent = Math.max(MIN_PANEL_SIZE, Math.min(100 - MIN_PANEL_SIZE * 2, (editorWidth / totalWidth) * 100))
+      const remaining = 100 - editorPercent
+      const terminalPercent = Math.max(MIN_PANEL_SIZE, remaining - MIN_PANEL_SIZE)
+      const resultsPercent = remaining - terminalPercent
+      setSizes({ editor: editorPercent, terminal: terminalPercent, results: resultsPercent })
+    } else if (dragging === 'terminal-results' && result) {
+      const terminalBottom = container.bottom - e.clientY
+      const resultsPercent = Math.max(MIN_PANEL_SIZE, Math.min(100 - sizes.editor - MIN_PANEL_SIZE, (terminalBottom / totalHeight) * 100))
+      const terminalPercent = 100 - sizes.editor - resultsPercent
+      setSizes(prev => ({ ...prev, terminal: terminalPercent, results: resultsPercent }))
+    }
+  }, [dragging, result, sizes.editor])
+
+  const handleDragEnd = useCallback(() => {
+    setDragging(null)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }, [])
+
+  useEffect(() => {
+    if (dragging) {
+      document.addEventListener('mousemove', handleDragMove)
+      document.addEventListener('mouseup', handleDragEnd)
+      return () => {
+        document.removeEventListener('mousemove', handleDragMove)
+        document.removeEventListener('mouseup', handleDragEnd)
+      }
+    }
+  }, [dragging, handleDragMove, handleDragEnd])
+
+  const editorWidth = layout === 'split' ? sizes.editor : 100
+  const terminalWidth = layout === 'split' ? sizes.terminal : layout === 'terminal' ? 100 : 0
+  const resultsHeight = result ? sizes.results : 0
+
   return (
-    <div className="sandbox-root flex h-full flex-col rounded-2xl border border-ink-600 bg-ink-900/90 overflow-hidden shadow-[0_0_40px_-10px_rgba(168,85,247,0.15)]">
+    <div
+      ref={containerRef}
+      className="sandbox-root flex h-full flex-col rounded-2xl border border-ink-600 bg-ink-900/90 overflow-hidden shadow-[0_0_40px_-10px_rgba(168,85,247,0.15)]"
+    >
       {/* Header Bar */}
       <header className="flex items-center justify-between gap-4 border-b border-ink-600/50 px-4 py-3 bg-ink-950/50 backdrop-blur-sm">
         <div className="flex items-center gap-3">
@@ -508,10 +575,10 @@ export function Sandbox() {
         {/* Editor Pane */}
         {(layout === 'split' || layout === 'editor') && (
           <div
-            className={`flex flex-col transition-all duration-300 ease-in-out ${
-              layout === 'split' ? 'w-[50%] min-w-[320px]' : 'w-full'
-            } border-r border-ink-600/50`}
-            style={{ height: layout === 'split' ? '100%' : '100%' }}
+            className={`flex flex-col transition-all duration-300 ease-in-out border-r border-ink-600/50 ${
+              layout === 'split' ? 'flex-shrink-0' : 'w-full'
+            }`}
+            style={{ width: layout === 'split' ? `${editorWidth}%` : '100%' }}
           >
             <div className="flex items-center justify-between border-b border-ink-600/50 px-3 py-2 bg-ink-950/50">
               <div className="flex items-center gap-2">
@@ -575,221 +642,230 @@ export function Sandbox() {
           </div>
         )}
 
-        {/* Resizer for split view */}
+        {/* Vertical Resizer: Editor ↔ Terminal */}
         {layout === 'split' && (
           <div
-            className="resizer w-1 cursor-col-resize flex items-center justify-center transition-colors hover:bg-accent-500/20 active:bg-accent-500/30"
+            className="resizer-v w-1 cursor-col-resize flex items-center justify-center transition-colors hover:bg-accent-500/20 active:bg-accent-500/30"
             style={{ background: 'linear-gradient(180deg, transparent 40%, var(--as-border) 50%, transparent 60%)' }}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              const startX = e.clientX
-              const startWidth = editorRef.current?.parentElement?.offsetWidth || 0
-              const handleMove = (moveEvent: MouseEvent) => {
-                const containerWidth = editorRef.current?.parentElement?.parentElement?.offsetWidth || 0
-                const newWidth = Math.max(320, Math.min(containerWidth - 320, startWidth + (moveEvent.clientX - startX)))
-                const percent = (newWidth / containerWidth) * 100
-                document.querySelector('.sandbox-root > div:nth-child(2) > div:first-child')?.setAttribute('style', `width: ${percent}%; min-width: 320px; height: 100%;`)
-              }
-              const handleUp = () => {
-                document.removeEventListener('mousemove', handleMove)
-                document.removeEventListener('mouseup', handleUp)
-              }
-              document.addEventListener('mousemove', handleMove)
-              document.addEventListener('mouseup', handleUp)
-            }}
+            onMouseDown={(e) => handleDragStart(e, 'editor-terminal')}
+            title="Drag to resize editor"
           >
-            <div className="w-px h-8 bg-ink-500/50 rounded-full" />
+            <GripVertical className="h-8 w-3 text-ink-500/50" />
           </div>
         )}
 
-        {/* Terminal Pane */}
-        {(layout === 'split' || layout === 'terminal') && (
-          <div
-            className={`flex flex-col transition-all duration-300 ease-in-out ${layout === 'split' ? 'flex-1 min-w-[320px]' : 'w-full'}`}
-          >
-            <div className="flex items-center justify-between border-b border-ink-600/50 px-3 py-2 bg-ink-950/50">
-              <div className="flex items-center gap-2">
-                <span className="label-xs text-paper-400 uppercase tracking-wider">Terminal</span>
-                <span className={`mono text-[10px] font-medium px-2 py-0.5 rounded ${
-                  isRunning ? 'bg-accent-500/20 text-accent-300 animate-pulse' :
-                  result?.success ? 'bg-verify-500/20 text-verify-400' :
-                  result?.success === false ? 'bg-conflict-500/20 text-conflict-400' :
-                  'bg-ink-700/50 text-paper-500'
-                }`}>
-                  {isRunning ? 'Running' : result?.success ? 'Success' : result?.success === false ? 'Failed' : 'Idle'}
-                </span>
+        {/* Terminal + Results Container */}
+        <div className="flex-1 flex flex-col relative min-w-0 overflow-hidden">
+          {/* Terminal Pane */}
+          {(layout === 'split' || layout === 'terminal') && (
+            <div
+              className={`flex flex-col transition-all duration-300 ease-in-out flex-shrink-0 ${
+                layout === 'split' ? '' : 'w-full'
+              }`}
+              style={{ 
+                width: layout === 'split' ? `${terminalWidth}%` : '100%',
+                height: layout === 'split' ? `calc(100% - ${resultsHeight}%)` : '100%'
+              }}
+            >
+              <div className="flex items-center justify-between border-b border-ink-600/50 px-3 py-2 bg-ink-950/50">
+                <div className="flex items-center gap-2">
+                  <span className="label-xs text-paper-400 uppercase tracking-wider">Terminal</span>
+                  <span className={`mono text-[10px] font-medium px-2 py-0.5 rounded ${
+                    isRunning ? 'bg-accent-500/20 text-accent-300 animate-pulse' :
+                    result?.success ? 'bg-verify-500/20 text-verify-400' :
+                    result?.success === false ? 'bg-conflict-500/20 text-conflict-400' :
+                    'bg-ink-700/50 text-paper-500'
+                  }`}>
+                    {isRunning ? 'Running' : result?.success ? 'Success' : result?.success === false ? 'Failed' : 'Idle'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={clearLogs} className="p-1.5 rounded text-paper-400 hover:bg-ink-700/50 hover:text-paper-100 transition-colors" title="Clear terminal">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => setLayout(layout === 'split' ? 'terminal' : 'split')} className="p-1.5 rounded text-paper-400 hover:bg-ink-700/50 hover:text-paper-100 transition-colors" title="Toggle layout">
+                    {layout === 'split' ? <Maximize2 className="h-3.5 w-3.5" /> : <Minimize2 className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <button onClick={clearLogs} className="p-1.5 rounded text-paper-400 hover:bg-ink-700/50 hover:text-paper-100 transition-colors" title="Clear terminal">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-                <button onClick={() => setLayout(layout === 'split' ? 'terminal' : 'split')} className="p-1.5 rounded text-paper-400 hover:bg-ink-700/50 hover:text-paper-100 transition-colors" title="Toggle layout">
-                  {layout === 'split' ? <Maximize2 className="h-3.5 w-3.5" /> : <Minimize2 className="h-3.5 w-3.5" />}
+
+              <div
+                ref={terminalRef}
+                className="terminal-output flex-1 overflow-y-auto p-4 font-mono text-[12.5px] leading-relaxed"
+                style={{
+                  fontFamily: '"JetBrains Mono", "Fira Code", "Monaco", monospace',
+                  fontSize: '12.5px',
+                  lineHeight: '1.6',
+                  color: 'var(--as-text-2)',
+                }}
+              >
+                {logs.length === 0 ? (
+                  <div className="terminal-welcome flex h-full flex-col items-center justify-center gap-4 text-paper-500/60">
+                    <div className="flex flex-col items-center gap-2 opacity-60">
+                      <TerminalSquare className="h-12 w-12 text-ink-500" />
+                      <p className="text-[14px] font-medium text-paper-400">Terminal Ready</p>
+                      <p className="text-[12px] text-center max-w-[280px]">Select a template or write your script, then press <kbd className="px-2 py-0.5 rounded bg-ink-700 border border-ink-500 text-paper-200 font-mono text-[11px]">Run in Sandbox</kbd> to execute in the isolated Docker environment.</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 max-w-[280px] text-[11px] text-paper-500">
+                      <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Ctrl+Enter</kbd> Run script</div>
+                      <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Ctrl+L</kbd> Clear terminal</div>
+                      <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Alt+E</kbd> Focus editor</div>
+                      <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Alt+T</kbd> Focus terminal</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {logs.map((entry, i) => (
+                      <div
+                        key={i}
+                        className={`terminal-line flex items-start gap-2 animate-slide-up ${
+                          entry.type === 'stderr' ? 'text-conflict-400' :
+                          entry.type === 'system' ? 'text-accent-300/80' :
+                          entry.type === 'result' ? 'text-verify-400' :
+                          'text-paper-300'
+                        }`}
+                        style={{ opacity: entry.type === 'system' ? 0.7 : 1 }}
+                      >
+                        <span className="terminal-timestamp shrink-0 text-[11px] text-paper-500 font-mono tabular-nums" style={{ width: '64px' }}>
+                          {entry.timestamp.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                        <span className={`flex-1 break-all whitespace-pre-wrap ${entry.type === 'system' ? 'italic' : ''}`}>
+                          {entry.content}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Run Bar */}
+              <div className="terminal-runbar border-t border-ink-600/50 px-4 py-3 bg-ink-950/50 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  {result && (
+                    <div className="flex items-center gap-3 flex-wrap text-[11px]">
+                      <span className="flex items-center gap-1.5 text-paper-400">
+                        <span>Duration:</span>
+                        <span className="mono text-accent-300 font-medium">{result.duration_sec.toFixed(2)}s</span>
+                      </span>
+                      <span className="flex items-center gap-1.5 text-paper-400">
+                        <span>Exit:</span>
+                        <span className={`mono font-medium ${result.exit_code === 0 ? 'text-verify-400' : 'text-conflict-400'}`}>
+                          {result.exit_code ?? 'N/A'}
+                        </span>
+                      </span>
+                      {Object.keys(result.metrics).length > 0 && (
+                        <span className="flex items-center gap-1.5 text-paper-400">
+                          <span>Metrics:</span>
+                          <span className="mono text-paper-200">
+                            {Object.entries(result.metrics).map(([k, v]) => `${k}=${v.toFixed(4)}`).join(', ')}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={runScript}
+                  disabled={isRunning || !status.available}
+                  className="run-button flex items-center gap-2 h-10 px-5 rounded-xl font-semibold text-[13px] transition-all disabled:cursor-not-allowed disabled:opacity-40
+                    bg-accent-500 text-white
+                    hover:!bg-accent-400 hover:shadow-[0_0_20px_var(--as-accent-glow)] active:scale-[0.98]
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950"
+                  style={{ boxShadow: '0 4px 16px var(--as-accent-glow)' }}
+                >
+                  {isRunning ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Running…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4" />
+                      <span>Run in Sandbox</span>
+                      <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/10 border border-white/5">Ctrl+Enter</kbd>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+          )}
 
+          {/* Horizontal Resizer: Terminal ↔ Results */}
+          {result && layout === 'split' && (
             <div
-              ref={terminalRef}
-              className="terminal-output flex-1 overflow-y-auto p-4 font-mono text-[12.5px] leading-relaxed"
-              style={{
-                fontFamily: '"JetBrains Mono", "Fira Code", "Monaco", monospace',
-                fontSize: '12.5px',
-                lineHeight: '1.6',
-                color: 'var(--as-text-2)',
-              }}
+              className="resizer-h h-1 cursor-row-resize w-full flex items-center justify-center transition-colors hover:bg-accent-500/20 active:bg-accent-500/30"
+              style={{ background: 'linear-gradient(90deg, transparent 40%, var(--as-border) 50%, transparent 60%)' }}
+              onMouseDown={(e) => handleDragStart(e, 'terminal-results')}
+              title="Drag to resize results panel"
             >
-              {logs.length === 0 ? (
-                <div className="terminal-welcome flex h-full flex-col items-center justify-center gap-4 text-paper-500/60">
-                  <div className="flex flex-col items-center gap-2 opacity-60">
-                    <TerminalSquare className="h-12 w-12 text-ink-500" />
-                    <p className="text-[14px] font-medium text-paper-400">Terminal Ready</p>
-                    <p className="text-[12px] text-center max-w-[280px]">Select a template or write your script, then press <kbd className="px-2 py-0.5 rounded bg-ink-700 border border-ink-500 text-paper-200 font-mono text-[11px]">Run in Sandbox</kbd> to execute in the isolated Docker environment.</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 max-w-[280px] text-[11px] text-paper-500">
-                    <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Ctrl+Enter</kbd> Run script</div>
-                    <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Ctrl+L</kbd> Clear terminal</div>
-                    <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Alt+E</kbd> Focus editor</div>
-                    <div className="p-2 rounded-lg bg-ink-800/50 border border-ink-600/50"><kbd className="font-mono text-paper-300">Alt+T</kbd> Focus terminal</div>
+              <GripHorizontal className="h-3 w-8 text-ink-500/50" />
+            </div>
+          )}
+
+          {/* Results Panel */}
+          {result && (
+            <div
+              className="results-panel flex-shrink-0 border-t border-ink-600/50 bg-ink-950/95 backdrop-blur-sm p-4 animate-slide-up"
+              style={{ height: layout === 'split' ? `${resultsHeight}%` : 'auto', minHeight: '120px', maxHeight: layout === 'split' ? `${resultsHeight}%` : '40vh' }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[12px] font-semibold uppercase tracking-wider text-paper-400">Execution Result</h3>
+                <button
+                  onClick={() => setResult(null)}
+                  className="p-1.5 rounded text-paper-400 hover:text-paper-100 hover:bg-ink-700/50 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+                <ResultCard label="Status" value={result.success ? 'Success' : 'Failed'} tone={result.success ? 'verify' : 'conflict'} icon={result.success ? CheckCircle : AlertCircle} />
+                <ResultCard label="Duration" value={`${result.duration_sec.toFixed(2)}s`} icon={Loader2} />
+                <ResultCard label="Exit Code" value={String(result.exit_code ?? 'N/A')} tone={result.exit_code === 0 ? 'verify' : 'conflict'} icon={TerminalSquare} />
+                <ResultCard label="Artifacts" value={String(result.artifacts.length)} icon={FileCode} />
+              </div>
+
+              {Object.keys(result.metrics).length > 0 && (
+                <div className="mb-4">
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-paper-400">Metrics</h4>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {Object.entries(result.metrics).map(([key, value]) => (
+                      <div key={key} className="rounded-lg border border-ink-600/50 bg-ink-800/50 px-3 py-2.5 transition-all hover:border-ink-500 hover:bg-ink-800">
+                        <div className="mono text-[10px] text-paper-500 uppercase tracking-wider">{key}</div>
+                        <div className="mono tnum mt-0.5 text-[19px] font-medium text-paper-100">{Number(value).toFixed(4)}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {logs.map((entry, i) => (
-                    <div
-                      key={i}
-                      className={`terminal-line flex items-start gap-2 animate-slide-up ${
-                        entry.type === 'stderr' ? 'text-conflict-400' :
-                        entry.type === 'system' ? 'text-accent-300/80' :
-                        entry.type === 'result' ? 'text-verify-400' :
-                        'text-paper-300'
-                      }`}
-                      style={{ opacity: entry.type === 'system' ? 0.7 : 1 }}
-                    >
-                      <span className="terminal-timestamp shrink-0 text-[11px] text-paper-500 font-mono tabular-nums" style={{ width: '64px' }}>
-                        {entry.timestamp.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              )}
+
+              {result.artifacts.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-paper-400">Artifacts</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {result.artifacts.map((artifact) => (
+                      <span key={artifact} className="flex items-center gap-1.5 rounded-lg bg-ink-800/50 border border-ink-600/50 px-3 py-1.5 text-[12px] font-mono text-paper-300 hover:border-ink-500 hover:bg-ink-800 transition-all">
+                        <FileCode className="h-3.5 w-3.5 text-paper-400" />
+                        {artifact}
                       </span>
-                      <span className={`flex-1 break-all whitespace-pre-wrap ${entry.type === 'system' ? 'italic' : ''}`}>
-                        {entry.content}
-                      </span>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(result.error_type || result.error_message) && (
+                <div className="rounded-xl border border-conflict-500/30 bg-conflict-500/10 p-4">
+                  <div className="flex items-center gap-2 text-conflict-400">
+                    <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                    <span className="font-medium text-[13px]">Error: {result.error_type || 'Unknown'}</span>
+                  </div>
+                  <p className="mt-2 text-[13px] text-paper-300 leading-relaxed">{result.error_message}</p>
                 </div>
               )}
             </div>
-
-            {/* Run Bar */}
-            <div className="terminal-runbar border-t border-ink-600/50 px-4 py-3 bg-ink-950/50 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                {result && (
-                  <div className="flex items-center gap-3 flex-wrap text-[11px]">
-                    <span className="flex items-center gap-1.5 text-paper-400">
-                      <span>Duration:</span>
-                      <span className="mono text-accent-300 font-medium">{result.duration_sec.toFixed(2)}s</span>
-                    </span>
-                    <span className="flex items-center gap-1.5 text-paper-400">
-                      <span>Exit:</span>
-                      <span className={`mono font-medium ${result.exit_code === 0 ? 'text-verify-400' : 'text-conflict-400'}`}>
-                        {result.exit_code ?? 'N/A'}
-                      </span>
-                    </span>
-                    {Object.keys(result.metrics).length > 0 && (
-                      <span className="flex items-center gap-1.5 text-paper-400">
-                        <span>Metrics:</span>
-                        <span className="mono text-paper-200">
-                          {Object.entries(result.metrics).map(([k, v]) => `${k}=${v.toFixed(4)}`).join(', ')}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <button
-                onClick={runScript}
-                disabled={isRunning || !status.available}
-                className="run-button flex items-center gap-2 h-10 px-5 rounded-xl font-semibold text-[13px] transition-all disabled:cursor-not-allowed disabled:opacity-40
-                  bg-accent-500 text-white
-                  hover:!bg-accent-400 hover:shadow-[0_0_20px_var(--as-accent-glow)] active:scale-[0.98]
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950"
-                style={{ boxShadow: '0 4px 16px var(--as-accent-glow)' }}
-              >
-                {isRunning ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Running…</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="h-4 w-4" />
-                    <span>Run in Sandbox</span>
-                    <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/10 border border-white/5">Ctrl+Enter</kbd>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Results Panel */}
-        {result && (
-          <div className="results-panel absolute bottom-0 left-0 right-0 border-t border-ink-600/50 bg-ink-950/95 backdrop-blur-sm p-4 animate-slide-up">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[12px] font-semibold uppercase tracking-wider text-paper-400">Execution Result</h3>
-              <button
-                onClick={() => setResult(null)}
-                className="p-1.5 rounded text-paper-400 hover:text-paper-100 hover:bg-ink-700/50 transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
-              <ResultCard label="Status" value={result.success ? 'Success' : 'Failed'} tone={result.success ? 'verify' : 'conflict'} icon={result.success ? CheckCircle : AlertCircle} />
-              <ResultCard label="Duration" value={`${result.duration_sec.toFixed(2)}s`} icon={Loader2} />
-              <ResultCard label="Exit Code" value={String(result.exit_code ?? 'N/A')} tone={result.exit_code === 0 ? 'verify' : 'conflict'} icon={TerminalSquare} />
-              <ResultCard label="Artifacts" value={String(result.artifacts.length)} icon={FileCode} />
-            </div>
-
-            {Object.keys(result.metrics).length > 0 && (
-              <div className="mb-4">
-                <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-paper-400">Metrics</h4>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {Object.entries(result.metrics).map(([key, value]) => (
-                    <div key={key} className="rounded-lg border border-ink-600/50 bg-ink-800/50 px-3 py-2.5 transition-all hover:border-ink-500 hover:bg-ink-800">
-                      <div className="mono text-[10px] text-paper-500 uppercase tracking-wider">{key}</div>
-                      <div className="mono tnum mt-0.5 text-[19px] font-medium text-paper-100">{Number(value).toFixed(4)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {result.artifacts.length > 0 && (
-              <div className="mb-4">
-                <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-paper-400">Artifacts</h4>
-                <div className="flex flex-wrap gap-2">
-                  {result.artifacts.map((artifact) => (
-                    <span key={artifact} className="flex items-center gap-1.5 rounded-lg bg-ink-800/50 border border-ink-600/50 px-3 py-1.5 text-[12px] font-mono text-paper-300 hover:border-ink-500 hover:bg-ink-800 transition-all">
-                      <FileCode className="h-3.5 w-3.5 text-paper-400" />
-                      {artifact}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {(result.error_type || result.error_message) && (
-              <div className="rounded-xl border border-conflict-500/30 bg-conflict-500/10 p-4">
-                <div className="flex items-center gap-2 text-conflict-400">
-                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
-                  <span className="font-medium text-[13px]">Error: {result.error_type || 'Unknown'}</span>
-                </div>
-                <p className="mt-2 text-[13px] text-paper-300 leading-relaxed">{result.error_message}</p>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )

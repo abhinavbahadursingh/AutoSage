@@ -1,17 +1,66 @@
 /**
  * Centralized AutoSage API client.
  *
- * Base URL comes from VITE_API_BASE_URL (defaults to the Vite proxy path
- * `/api/v1` so the browser never needs a hardcoded localhost origin).
- * Auth uses the backend's existing JWT Bearer mechanism (dev-token mint +
- * Authorization header) — no second auth system.
+ * Base URL resolution (first non-empty wins):
+ *  1. VITE_API_BASE_URL (e.g. `/api/v1` for the Vite dev proxy, or an
+ *     absolute `https://<backend>/api/v1` in production)
+ *  2. VITE_BACKEND_ORIGIN + `/api/v1` (production: `VITE_BACKEND_ORIGIN`
+ *     is the Render backend origin, e.g. `https://autosage-1.onrender.com`)
+ *  3. `/api/v1` (same-origin fallback)
+ *
+ * Auth uses the backend's existing JWT Bearer mechanism: every request sends
+ * `Authorization: Bearer <token>` where the token is a Supabase Auth JWT
+ * (RS256, verified via JWKS) or a Better Auth HS256 JWT. In local
+ * development only, the backend's dev-token minter may be used instead —
+ * the production backend returns 404 for it by design, so this client never
+ * calls it outside local dev (see isDevTokenAllowed).
  */
 
 const TOKEN_KEY = 'as_access_token'
 const USER_KEY = 'as_auth_user'
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
-const WS_BASE = (import.meta.env.VITE_WS_BASE_URL as string | undefined) || ''
+function resolveApiBase(): string {
+  const explicit = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+  if (explicit) return explicit.replace(/\/$/, '')
+  const origin = (import.meta.env.VITE_BACKEND_ORIGIN as string | undefined)?.trim()
+  if (origin) return `${origin.replace(/\/$/, '')}/api/v1`
+  return '/api/v1'
+}
+
+const API_BASE = resolveApiBase()
+const WS_BASE = ((import.meta.env.VITE_WS_BASE_URL as string | undefined) || '').trim()
+
+/**
+ * Whether the local-dev token minter (POST /auth/dev-token) may be used.
+ *
+ * True only for local development: explicit opt-in via
+ * VITE_ALLOW_DEV_TOKEN=true, or when the page is served from localhost
+ * (and not explicitly disabled). Production builds served from any other
+ * host never touch the dev-token endpoint — the production backend answers
+ * 404 there by design.
+ */
+export function isDevTokenAllowed(): boolean {
+  const flag = (import.meta.env.VITE_ALLOW_DEV_TOKEN as string | undefined)?.trim().toLowerCase()
+  if (flag === 'true') return true
+  if (flag === 'false') return false
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return true
+  }
+  return false
+}
+
+/** Error thrown when code asks for a dev token where it is not allowed. */
+export function devTokenDisabledError(): ApiError {
+  return new ApiError(
+    404,
+    {
+      detail:
+        'Demo/dev login is disabled in this environment: the backend only mints dev tokens for local development. Sign in with your production account instead.',
+    },
+    '/auth/dev-token',
+  )
+}
 
 export interface ApiUser {
   id: string
@@ -324,8 +373,16 @@ type TokenRefresh = Promise<string>
 
 let inflightToken: TokenRefresh | null = null
 
-/** Mint a backend dev JWT (existing project auth path for local/dev). */
-async function mintDevToken(): Promise<DevTokenResponse> {
+/**
+ * Mint a backend dev JWT.
+ *
+ * LOCAL DEVELOPMENT ONLY. The production backend (APP_ENV=production)
+ * intentionally answers 404 here, so this function refuses to issue the
+ * request unless isDevTokenAllowed() — production callers get a clear
+ * local error instead of a confusing HTTP 404.
+ */
+export async function mintDevToken(): Promise<DevTokenResponse> {
+  if (!isDevTokenAllowed()) throw devTokenDisabledError()
   const res = await fetch(`${API_BASE}/auth/dev-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -343,10 +400,22 @@ async function mintDevToken(): Promise<DevTokenResponse> {
   return (await res.json()) as DevTokenResponse
 }
 
+/**
+ * Return the stored Bearer token, minting a dev token only in local dev.
+ * In production with no stored token this throws a 401 "sign in required"
+ * error instead of calling the (404) dev-token endpoint.
+ */
 export async function ensureToken(force = false): Promise<string> {
   if (!force) {
     const existing = getToken()
     if (existing) return existing
+  }
+  if (!isDevTokenAllowed()) {
+    throw new ApiError(
+      401,
+      { detail: 'Not authenticated. Sign in to continue.' },
+      '/auth/dev-token',
+    )
   }
   if (!inflightToken) {
     inflightToken = mintDevToken()
@@ -360,6 +429,29 @@ export async function ensureToken(force = false): Promise<string> {
       })
   }
   return inflightToken
+}
+
+/**
+ * Production login with an already-obtained JWT (Supabase Auth / Better
+ * Auth session token, or a token pasted by the operator). The token is
+ * stored and immediately validated against GET /auth/me so a bad token
+ * never leaves the login screen looking valid.
+ */
+export async function loginWithToken(accessToken: string): Promise<ApiUser> {
+  const token = accessToken.trim()
+  if (!token) {
+    throw new ApiError(401, { detail: 'No token provided.' }, '/auth/me')
+  }
+  setToken(token)
+  try {
+    const me = await request<ApiUser>('/auth/me')
+    setCachedUser(me)
+    return me
+  } catch (err) {
+    setToken(null)
+    setCachedUser(null)
+    throw err
+  }
 }
 
 function resolveUrl(path: string): string {
@@ -410,13 +502,20 @@ async function request<T>(
 
   if (!res.ok) {
     if (res.status === 401 && auth && !retried) {
-      setToken(null)
-      try {
-        await ensureToken(true)
-      } catch {
-        /* fall through to throw */
+      // Local dev: the dev-token minter can silently re-issue a token.
+      // Production: there is nothing to silently re-mint (dev-token is 404
+      // by design), so drop the stale token and surface the 401 — the
+      // login screen owns re-authentication.
+      if (isDevTokenAllowed()) {
+        setToken(null)
+        try {
+          await ensureToken(true)
+        } catch {
+          /* fall through to throw */
+        }
+        return request<T>(path, { ...init, retried: true })
       }
-      return request<T>(path, { ...init, retried: true })
+      setToken(null)
     }
     throw new ApiError(res.status, body, finalUrl)
   }
@@ -439,18 +538,39 @@ export const api = {
 
   health: () => request<HealthResponse>('/health', { auth: false }),
 
+  /**
+   * App-start authentication.
+   * - A stored token is validated via GET /auth/me (works in every env).
+   * - No token + local dev: mint a dev token (historical local behavior).
+   * - No token + production: throw "sign in required" — never call the
+   *   dev-token endpoint (production answers 404 by design).
+   * - Stored-but-expired token (401): local dev re-mints, production
+   *   clears the token and throws so the login screen takes over.
+   */
   async bootstrapAuth(): Promise<ApiUser> {
+    const stored = getToken()
+    if (!stored && !isDevTokenAllowed()) {
+      throw new ApiError(
+        401,
+        { detail: 'Not authenticated. Sign in to continue.' },
+        '/auth/me',
+      )
+    }
     await ensureToken()
     try {
       const me = await request<ApiUser>('/auth/me')
       setCachedUser(me)
       return me
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
+      if (err instanceof ApiError && err.status === 401 && isDevTokenAllowed()) {
         const minted = await mintDevToken()
         setToken(minted.access_token)
         setCachedUser(minted.user)
         return minted.user
+      }
+      if (err instanceof ApiError && err.status === 401) {
+        setToken(null)
+        setCachedUser(null)
       }
       throw err
     }
@@ -585,22 +705,53 @@ export const api = {
   sandboxStatus: () => request<SandboxStatusResponse>('/sandbox/status'),
 }
 
-/** Resolve a WS URL through the Vite proxy or configured WS base. */
+/**
+ * Resolve a WS URL for one experiment stream.
+ *
+ * Backend route is `/api/v1/experiments/{id}/ws` with `?token=` auth.
+ * - VITE_WS_BASE_URL set (production: `wss://autosage-1.onrender.com`):
+ *   treated as the backend origin, optionally with an API prefix path. A
+ *   bare origin gains the `/api/v1` prefix automatically.
+ * - Otherwise derived from the HTTP API base (dev proxy or absolute URL).
+ */
 export function experimentWsUrl(experimentId: string, token: string): string {
-  // Use explicitly configured WS base if available (e.g., ws://host:port from .env)
+  const query = `?token=${encodeURIComponent(token)}`
+  const streamPath = `/experiments/${experimentId}/ws${query}`
+
+  const fromHttpBase = (base: string): string => {
+    const trimmed = base.replace(/\/$/, '')
+    if (trimmed.startsWith('/')) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${proto}//${window.location.host}${trimmed}${streamPath}`
+    }
+    const url = new URL(trimmed)
+    const proto = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const prefix = url.pathname.replace(/\/$/, '')
+    return `${proto}//${url.host}${prefix}${streamPath}`
+  }
+
   if (WS_BASE) {
-    const base = WS_BASE.replace(/\/$/, '')
-    const proto = base.startsWith('wss:') || base.startsWith('https:') ? 'wss:' : 'ws:'
-    return `${proto}//${new URL(base).host}${base.includes('/experiments/') ? '' : `/experiments/${experimentId}/ws`}?token=${encodeURIComponent(token)}`
+    const trimmed = WS_BASE.replace(/\/$/, '')
+    // Back-compat: a base that already points at an experiments stream path.
+    if (trimmed.includes('/experiments/')) {
+      const sep = trimmed.includes('?') ? '&' : '?'
+      return `${trimmed}${sep}token=${encodeURIComponent(token)}`
+    }
+    try {
+      const url = new URL(trimmed)
+      const proto = url.protocol === 'https:' || url.protocol === 'wss:' ? 'wss:' : 'ws:'
+      const path = url.pathname.replace(/\/$/, '')
+      // Bare origin (or origin + non-API prefix): the API lives under /api/v1.
+      const prefix = path === '' || path === '/' ? '/api/v1' : path
+      return `${proto}//${url.host}${prefix}${streamPath}`
+    } catch {
+      // Non-absolute value: treat like the dev-proxy path form.
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+      return `${proto}//${window.location.host}${path}${streamPath}`
+    }
   }
-  const base = API_BASE.replace(/\/$/, '')
-  if (base.startsWith('/')) {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${proto}//${window.location.host}${base}/experiments/${experimentId}/ws?token=${encodeURIComponent(token)}`
-  }
-  const httpUrl = new URL(base)
-  const proto = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${httpUrl.host}${httpUrl.pathname.replace(/\/$/, '')}/experiments/${experimentId}/ws?token=${encodeURIComponent(token)}`
+  return fromHttpBase(API_BASE)
 }
 
 export function absoluteWsBase(): string | null {

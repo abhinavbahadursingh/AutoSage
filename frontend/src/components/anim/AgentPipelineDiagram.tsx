@@ -19,15 +19,29 @@ const AGENTS = [
   { id: 'delivery', label: 'Pipeline',      icon: '⊕', desc: 'Packages a seeded, reproducible artifact', color: '#5eead4' },
 ]
 
+// Scale factor: 1.45x (45% increase)
+const SCALE = 1.45
+
 // SVG path between consecutive nodes (horizontal chain, 5 nodes)
-const NODE_X = [100, 275, 450, 625, 800]
-const NODE_Y = 80
-const VBOX_W = 900
-const VBOX_H = 160
+const NODE_X = [100, 275, 450, 625, 800].map(x => x * SCALE)
+const NODE_Y = 80 * SCALE
+const VBOX_W = 900 * SCALE
+const VBOX_H = 160 * SCALE
+
+const NODE_R = 16 * SCALE
+const NODE_R_ACTIVE = 15 * SCALE
+const GLOW_R = 22 * SCALE
+const ICON_FONT_SIZE = 14 * SCALE
+const STROKE_W = 2 * SCALE
+const STROKE_W_ACTIVE = 2.5 * SCALE
+const GLOW_STROKE_W = 1.5 * SCALE
+const LABEL_FONT_SIZE = 12.5 * SCALE
+const DESC_FONT_SIZE = 11 * SCALE
 
 function buildPath(x1: number, x2: number, y: number) {
   const mx = (x1 + x2) / 2
-  return `M ${x1} ${y} C ${mx} ${y - 40}, ${mx} ${y + 40}, ${x2} ${y}`
+  const curveOffset = 40 * SCALE
+  return `M ${x1} ${y} C ${mx} ${y - curveOffset}, ${mx} ${y + curveOffset}, ${x2} ${y}`
 }
 
 const PATHS = NODE_X.slice(0, -1).map((x, i) => buildPath(x, NODE_X[i + 1], NODE_Y))
@@ -79,7 +93,7 @@ export function AgentPipelineDiagram() {
         {/* ── SVG connection diagram ── */}
         <svg
           viewBox={`0 0 ${VBOX_W} ${VBOX_H}`}
-          className="mb-8 w-full max-w-2xl"
+          className="mb-8 w-full max-w-5xl"
           style={{ overflow: 'visible' }}
           aria-hidden
         >
@@ -91,7 +105,7 @@ export function AgentPipelineDiagram() {
                 d={d}
                 fill="none"
                 stroke="var(--as-border)"
-                strokeWidth="2"
+                strokeWidth={STROKE_W}
                 strokeLinecap="round"
               />
               {/* Animated draw */}
@@ -100,7 +114,7 @@ export function AgentPipelineDiagram() {
                   d={d}
                   fill="none"
                   stroke={`url(#pg${i})`}
-                  strokeWidth="2.5"
+                  strokeWidth={STROKE_W_ACTIVE}
                   strokeLinecap="round"
                   style={{ pathLength: agentProgress[i] }}
                 />
@@ -126,13 +140,13 @@ export function AgentPipelineDiagram() {
                 <motion.circle
                   cx={NODE_X[i]}
                   cy={NODE_Y}
-                  r={22}
+                  r={GLOW_R}
                   fill="none"
                   stroke={agent.color}
-                  strokeWidth="1.5"
+                  strokeWidth={GLOW_STROKE_W}
                   style={{
                     opacity: agentProgress[i],
-                    filter: `drop-shadow(0 0 8px ${agent.color})`,
+                    filter: `drop-shadow(0 0 ${8 * SCALE}px ${agent.color})`,
                   }}
                 />
               )}
@@ -140,31 +154,31 @@ export function AgentPipelineDiagram() {
               <circle
                 cx={NODE_X[i]}
                 cy={NODE_Y}
-                r={16}
+                r={NODE_R}
                 fill="var(--as-bg-2)"
                 stroke="var(--as-border)"
-                strokeWidth="1"
+                strokeWidth={STROKE_W / 2}
               />
               {/* Active fill */}
               {!reduced ? (
                 <motion.circle
                   cx={NODE_X[i]}
                   cy={NODE_Y}
-                  r={15}
+                  r={NODE_R_ACTIVE}
                   style={{
                     fill: agent.color,
                     opacity: agentProgress[i],
                   }}
                 />
               ) : (
-                <circle cx={NODE_X[i]} cy={NODE_Y} r={15} fill={agent.color} opacity={0.3} />
+                <circle cx={NODE_X[i]} cy={NODE_Y} r={NODE_R_ACTIVE} fill={agent.color} opacity={0.3} />
               )}
               {/* Icon text */}
               <text
                 x={NODE_X[i]}
-                y={NODE_Y + 5}
+                y={NODE_Y + 5 * SCALE}
                 textAnchor="middle"
-                fontSize="14"
+                fontSize={ICON_FONT_SIZE}
                 fill="white"
                 style={{ userSelect: 'none' }}
               >
@@ -175,7 +189,7 @@ export function AgentPipelineDiagram() {
         </svg>
 
         {/* ── Agent labels (light up on scroll) ── */}
-        <div className="grid w-full max-w-2xl grid-cols-5 gap-2 text-center">
+        <div className="grid w-full max-w-5xl grid-cols-5 gap-2 text-center">
           {AGENTS.map((agent, i) => (
             <motion.div
               key={agent.id}
@@ -183,14 +197,14 @@ export function AgentPipelineDiagram() {
               className="flex flex-col items-center gap-1.5"
             >
               <span
-                className="text-[12.5px] font-semibold"
-                style={{ color: agent.color }}
+                className="font-semibold"
+                style={{ color: agent.color, fontSize: LABEL_FONT_SIZE }}
               >
                 {agent.label}
               </span>
               <span
-                className="hidden text-[11px] leading-snug sm:block"
-                style={{ color: 'var(--as-text-3)' }}
+                className="hidden leading-snug sm:block"
+                style={{ color: 'var(--as-text-3)', fontSize: DESC_FONT_SIZE }}
               >
                 {agent.desc}
               </span>

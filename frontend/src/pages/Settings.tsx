@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { PageHeader } from '../components/layout/Sidebar'
 import { Badge } from '../components/ui/Badge'
 import { SectionTitle } from '../components/ui/Primitives'
+import { isDevTokenAllowed } from '../lib/api'
+import { isSupabaseConfigured } from '../lib/supabaseAuth'
 import type { VerificationLevel } from '../lib/types'
 
 function Toggle({ on, onChange, label, detail }: { on: boolean; onChange: (v: boolean) => void; label: string; detail: string }) {
@@ -139,16 +141,37 @@ export function SettingsPage() {
               <div className="label-xs mb-1.5">Auth mode</div>
               <div className="flex items-center gap-2">
                 <code className="mono min-w-0 flex-1 truncate rounded-sm border border-ink-700 bg-ink-850 px-2 py-1.5 text-[13.5px] text-paper-300">
-                  Bearer JWT · POST /auth/dev-token
+                  {isDevTokenAllowed()
+                    ? 'Bearer JWT · POST /auth/dev-token (local dev)'
+                    : isSupabaseConfigured()
+                      ? 'Bearer JWT · Supabase Auth'
+                      : 'Bearer JWT · Supabase / Better Auth'}
                 </code>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2 text-[13.5px] text-paper-500">
-                <Badge tone="verify">dev token mint</Badge>
+                {isDevTokenAllowed() ? (
+                  <Badge tone="verify">dev token mint</Badge>
+                ) : (
+                  <Badge tone="verify">production auth</Badge>
+                )}
                 <Badge tone="dim">Authorization header</Badge>
               </div>
               <p className="mt-3 text-[13.5px] leading-relaxed text-paper-500">
-                The UI obtains a backend JWT via <span className="mono text-paper-300">/api/v1/auth/dev-token</span>{' '}
-                and sends it as a Bearer token. Separate workspace API keys are not implemented in this backend.
+                {isDevTokenAllowed() ? (
+                  <>
+                    Local dev: the UI obtains a backend JWT via{' '}
+                    <span className="mono text-paper-300">/api/v1/auth/dev-token</span> and sends it as a
+                    Bearer token. The production backend disables that endpoint — there the token comes
+                    from Supabase Auth / Better Auth instead.
+                  </>
+                ) : (
+                  <>
+                    The UI sends a Supabase Auth / Better Auth JWT as a Bearer token, verified by the
+                    backend against <span className="mono text-paper-300">GET /api/v1/auth/me</span>. The
+                    dev-token minter is disabled in production. Separate workspace API keys are not
+                    implemented in this backend.
+                  </>
+                )}
               </p>
             </div>
           </section>
