@@ -1,4 +1,4 @@
-"""0001: initial schema — pgvector extension + core tables.
+"""0001: initial schema — core tables.
 
 Tables mirror the Phase 1 ORM models (projects, datasets, pipeline_runs,
 evidence_trail_nodes, verified_memories). No seed data.
@@ -8,7 +8,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from pgvector.sqlalchemy import Vector
 
 revision: str = "0001_initial_schema"
 down_revision: Union[str, Sequence[str], None] = None
@@ -17,7 +16,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     op.create_table(
         "projects",
@@ -78,7 +76,7 @@ def upgrade() -> None:
         sa.Column("dataset_fingerprint", postgresql.JSONB(), nullable=False),
         sa.Column("solution_strategy", sa.String(), nullable=False),
         sa.Column("achieved_metric_value", sa.Float(), nullable=False),
-        sa.Column("embedding", Vector(1536), nullable=True),
+        sa.Column("embedding", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=True),
     )
 

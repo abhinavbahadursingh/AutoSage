@@ -105,18 +105,6 @@ export interface MemoryEntry {
   tags: string[]
 }
 
-export interface DatasetRecord {
-  name: string
-  rows: number
-  columns: number
-  size: string
-  target?: string
-  task: string
-  missing: number
-  updated: string
-  tags: string[]
-}
-
 export interface ModelRecord {
   name: string
   family: string

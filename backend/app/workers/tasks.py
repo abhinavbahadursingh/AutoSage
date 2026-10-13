@@ -268,7 +268,53 @@ async def _execute_async(task: Task, experiment_id: str) -> Dict[str, Any]:
                 }
             )
 
-            if final_state.get("status") == "FAILED":
+            if final_state.get("status") == "AWAITING_DATASET":
+                # Parked by Discovery: the UI is asking for the dataset.
+                # Leave the run FAILED (the only non-terminal restable state)
+                # but say why, so the client can prompt instead of guessing.
+                missing = final_state.get("dataset_missing_name") or "dataset"
+                experiment.error_detail = (
+                    f"dataset_required: {missing}"
+                )[:2000]
+                experiment = await experiment_service.transition_experiment(
+                    session, experiment, ExperimentStatus.FAILED.value
+                )
+                experiment.result_summary = {
+                    **experiment.result_summary,
+                    "awaiting_dataset": True,
+                    "missing_dataset": str(missing),
+                }
+                log_with_context(
+                    logger, logging.WARNING, "experiment_awaiting_dataset",
+                    experiment=experiment_id, dataset=missing,
+                )
+            elif final_state.get("status") == "AWAITING_TARGET":
+                # Parked by Profiling: the user must choose a target column.
+                # No training ran, so there is no score to report.
+                resolution = final_state.get("target_resolution") or {}
+                missing = (
+                    str(resolution.get("reason") or "target column could not be determined")
+                )
+                experiment.error_detail = f"target_required: {missing}"[:2000]
+                experiment = await experiment_service.transition_experiment(
+                    session, experiment, ExperimentStatus.FAILED.value
+                )
+                experiment.result_summary = {
+                    **experiment.result_summary,
+                    "awaiting_target": True,
+                    "target_resolution": resolution,
+                    "target_candidates": list(resolution.get("candidate_names") or []),
+                    "primary_score": None,
+                    # Lets a later retry be recognised as identical (no progress).
+                    "target_error_fingerprint": _target_fingerprint(
+                        experiment.config or {}, resolution
+                    ),
+                }
+                log_with_context(
+                    logger, logging.WARNING, "experiment_awaiting_target",
+                    experiment=experiment_id, reason=missing,
+                )
+            elif final_state.get("status") == "FAILED":
                 experiment.error_detail = (
                     f"{final_state.get('current_stage') or 'workflow'} stage failed — "
                     f"verification retries exhausted"
@@ -333,6 +379,38 @@ exec(open("/workspace/train_script.py").read())
     return script
 
 
+def _target_fingerprint(config: Dict[str, Any], resolution: Dict[str, Any]) -> str:
+    """Stable identity of a target-resolution outcome.
+
+    Built from the inputs that produced it (dataset, requested target,
+    verdict, candidate set) rather than the message text, so incidental
+    wording changes do not defeat the dedup.
+    """
+    return "|".join(
+        [
+            "target_resolution",
+            str((config or {}).get("dataset_name") or (config or {}).get("dataset") or ""),
+            str((config or {}).get("target_column") or ""),
+            str((resolution or {}).get("status") or ""),
+            ",".join(sorted(str(c) for c in ((resolution or {}).get("candidate_names") or []))),
+        ]
+    )
+
+
+def _target_error_is_unchanged(experiment: Experiment) -> bool:
+    """True when re-running would resolve the target exactly the same way.
+
+    Target resolution is deterministic given the dataset and the request, so an
+    identical fingerprint means a retry can only repeat the same failure.
+    """
+    summary = experiment.result_summary or {}
+    previous = summary.get("target_error_fingerprint")
+    if not previous:
+        return False
+    current = _target_fingerprint(experiment.config or {}, summary.get("target_resolution") or {})
+    return current == previous
+
+
 async def _handle_workflow_error(
     task: Task, session: Any, experiment: Experiment, exc: Exception
 ) -> Dict[str, Any]:
@@ -340,6 +418,25 @@ async def _handle_workflow_error(
     experiment_id = str(experiment.id)
     log_exception_with_context(logger, "experiment_failed", experiment=experiment_id)
     experiment.error_detail = f"{type(exc).__name__}: {exc}"[:2000]
+
+    # Deterministic resolution failures cannot improve on retry: the same
+    # dataset and request produce the same unresolved target every time. Retrying
+    # just burns the backoff budget and re-runs identical work, so stop now.
+    summary = experiment.result_summary or {}
+    if summary.get("awaiting_target") and _target_error_is_unchanged(experiment):
+        log_with_context(
+            logger, logging.WARNING, "experiment_target_error_not_retried",
+            experiment=experiment_id, error=experiment.error_detail,
+        )
+        publish_experiment_failed(
+            experiment_id=UUID(experiment_id),
+            error_detail=experiment.error_detail,
+            retry_count=experiment.retry_count or 0,
+            max_retries=experiment.max_retries or 0,
+            will_retry=False,
+        )
+        return {"experiment_id": experiment_id, "status": experiment.status}
+
     experiment = await experiment_service.transition_experiment(
         session, experiment, ExperimentStatus.FAILED.value
     )

@@ -5,8 +5,10 @@ import { Badge } from '../components/ui/Badge'
 import { statusTone } from '../lib/tones'
 import { ExecutionTimeline } from '../components/workspace/ExecutionTimeline'
 import { AgentDrawer } from '../components/workspace/AgentDrawer'
+import { DatasetUploadDialog } from '../components/datasets/DatasetUploadDialog'
 import { STAGE_META, formatApiDate } from '../data/experiments'
 import { fmtMs } from '../lib/format'
+import { api, ApiError } from '../lib/api'
 
 const ACTIVE = new Set(['QUEUED', 'RUNNING', 'RETRYING'])
 
@@ -91,10 +93,47 @@ export function WorkspacePage() {
     runState,
     elapsedLabel,
     experimentsLoading,
+    experiments,
     authError,
     refreshExperiments,
+    toast,
+    datasetRequest,
+    clearDatasetRequest,
   } = useStore()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [resuming, setResuming] = useState(false)
+
+  // The discovery agent parked the run asking for a dataset. Once the upload
+  // lands, write the real filename into the experiment config and restart it,
+  // so the pipeline continues from the top with the file discovery asked for.
+  const resumeRun = async (storedName: string) => {
+    const experimentId = datasetRequest?.experimentId
+    if (!experimentId || resuming) return
+    setResuming(true)
+    try {
+      // Restarting alone would re-park on the old (missing) name: start only
+      // resets status, it never rewrites config.
+      const current = experiments.find((e) => e.id === experimentId)
+      await api.updateExperiment(experimentId, {
+        config: { ...(current?.config ?? {}), dataset: storedName, dataset_name: storedName },
+      })
+      await run(experimentId)
+      toast({
+        title: 'Dataset uploaded',
+        detail: `Resuming the run with ${storedName}.`,
+        tone: 'success',
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not resume the run',
+        detail: err instanceof ApiError ? err.message : 'The dataset was uploaded but the run did not restart.',
+        tone: 'error',
+      })
+    } finally {
+      setResuming(false)
+      clearDatasetRequest()
+    }
+  }
 
   const exp = activeExperiment
   const isLive = exp ? ACTIVE.has(exp.status) && runState.id === exp.id : false
@@ -486,6 +525,14 @@ export function WorkspacePage() {
 
       {drawerOpen && selectedNode && (
         <AgentDrawer experiment={exp} node={selectedNode} onClose={() => setDrawerOpen(false)} />
+      )}
+
+      {datasetRequest && exp && exp.id === datasetRequest.experimentId && (
+        <DatasetUploadDialog
+          datasetName={datasetRequest.name}
+          onClose={clearDatasetRequest}
+          onUploaded={(name) => void resumeRun(name)}
+        />
       )}
     </div>
   )

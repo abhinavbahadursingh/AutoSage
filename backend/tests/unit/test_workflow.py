@@ -275,8 +275,13 @@ def test_runner_happy_path_is_json_safe(recall_experiment_config: dict) -> None:
     json.dumps(final)  # must survive the json result backend
 
 
-def test_runner_propagates_stage_failure() -> None:
+def test_runner_propagates_stage_failure(recall_experiment_config: dict) -> None:
+    # A real dataset is required: without one the run parks at discovery and
+    # never reaches the injected profiler failure.
     with pytest.raises(RuntimeError, match="profiler"):
         run_experiment_workflow(
-            experiment_id="run-2", workspace_id="w", fail_stage="profiler"
+            experiment_id="run-2",
+            workspace_id="w",
+            fail_stage="profiler",
+            experiment_config=recall_experiment_config,
         )

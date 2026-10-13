@@ -84,6 +84,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [memoryError, setMemoryError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [liveStage, setLiveStage] = useState<StageId | null>(null)
+  // Set when the discovery agent parks the run asking for a dataset. The
+  // workspace shows the upload prompt and re-runs once the file is stored.
+  const [datasetRequest, setDatasetRequest] = useState<{ experimentId: string; name: string } | null>(
+    null,
+  )
   const [runState, setRunState] = useState<RunState>({
     id: null,
     paused: false,
@@ -124,6 +129,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((x) => x.id !== id))
+  }, [])
+
+  const clearDatasetRequest = useCallback(() => {
+    setDatasetRequest(null)
   }, [])
 
   const pushLog = useCallback((id: string, line: Omit<LogLine, 'id' | 'ts'>) => {
@@ -346,6 +355,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                       ? `verification attempt ${String(p.attempt ?? '?')}/${String(p.max_attempts ?? '?')}`
                       : `verification ${p.passed ? 'passed' : 'did not pass'} · gate=${String(p.gate_decision ?? '')}`,
                 })
+              } else if (et === 'dataset.required') {
+                // Discovery could not resolve the run's dataset — surface the
+                // upload prompt and hold the run here until a file lands.
+                const name = String(p.dataset_name ?? '')
+                const unnamed = !name || /no dataset selected/i.test(name)
+                setDatasetRequest({ experimentId, name })
+                pushLog(experimentId, {
+                  level: 'WARN',
+                  agent: 'Discovery',
+                  text: unnamed
+                    ? 'no dataset attached to the run — upload required'
+                    : `dataset not found by the search agent · ${name} — upload required`,
+                })
+                toast({
+                  title: unnamed ? 'Waiting on a dataset' : 'Dataset not found',
+                  detail: unnamed
+                    ? 'The discovery agent needs a dataset. Upload one to continue the run.'
+                    : `The discovery agent could not find ${name}. Upload it to continue.`,
+                  tone: 'warn',
+                })
+                void api.getExperiment(experimentId).then(applyRaw).catch(() => undefined)
               } else if (et === 'experiment.completed') {
                 setLiveStage('pipeline')
                 pushLog(experimentId, {
@@ -437,11 +467,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   tone: 'success',
                 })
               } else if (raw.status === 'FAILED') {
-                toast({
-                  title: 'Experiment failed',
-                  detail: raw.error_detail ?? raw.name,
-                  tone: 'error',
-                })
+                // A run parked by Discovery reports `dataset_required:` in its
+                // error detail; prompt for the upload instead of a bare error.
+                const detail = raw.error_detail ?? raw.name
+                const missing = raw.result_summary?.missing_dataset
+                if (raw.result_summary?.awaiting_dataset === true) {
+                  const name = typeof missing === 'string' ? missing : ''
+                  // "no dataset selected" is the backend's sentinel for a run
+                  // that named no dataset — not a file it failed to find.
+                  const unnamed = !name || /no dataset selected/i.test(name)
+                  setDatasetRequest({ experimentId, name })
+                  toast({
+                    title: unnamed ? 'Waiting on a dataset' : 'Dataset not found',
+                    detail: unnamed
+                      ? 'The discovery agent needs a dataset. Upload one to continue the run.'
+                      : `The discovery agent could not find ${name}. Upload it to continue.`,
+                    tone: 'warn',
+                  })
+                } else {
+                  toast({ title: 'Experiment failed', detail, tone: 'error' })
+                }
               }
               void refreshExperiments()
             }
@@ -554,12 +599,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           /regress|eta|forecast|price|amount|mae|rmse/i.test(opts.prompt) ? 'regression' : 'classification'
         const config: Record<string, unknown> = {
           prompt: opts.prompt,
-          dataset: opts.dataset,
-          dataset_name: opts.dataset,
           target_column: opts.target,
           evaluation_metric: opts.metric,
           source: 'frontend',
           task_type: taskType,
+        }
+        // Only name a dataset when one is actually attached. An empty name
+        // reaches the discovery agent as "unspecified", which parks the run
+        // and asks the user for a file.
+        if (opts.dataset) {
+          config.dataset = opts.dataset
+          config.dataset_name = opts.dataset
         }
         // metric key only when backend allows it
         const allowedMetrics = new Set([
@@ -815,6 +865,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       searchMemory,
       elapsedLabel,
       liveStage,
+      datasetRequest,
+      clearDatasetRequest,
     }),
     [
       user,
@@ -844,6 +896,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       searchMemory,
       elapsedLabel,
       liveStage,
+      datasetRequest,
+      clearDatasetRequest,
     ],
   )
 

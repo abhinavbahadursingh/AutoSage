@@ -26,6 +26,7 @@ import { ModelsPage } from './pages/Models'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
 import { SandboxPage } from './pages/Sandbox'
+import { PipelinePage } from './pages/Pipeline'
 
 function ProtectedRoute() {
   const { authReady, user } = useStore()
@@ -142,6 +143,7 @@ function AnimatedRoutes() {
             <Route path="/models"      element={<PageTransition><ModelsPage /></PageTransition>} />
             <Route path="/settings"    element={<PageTransition><SettingsPage /></PageTransition>} />
             <Route path="/sandbox"     element={<PageTransition><SandboxPage /></PageTransition>} />
+            <Route path="/pipeline"    element={<PageTransition><PipelinePage /></PageTransition>} />
           </Route>
         </Route>
 

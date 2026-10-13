@@ -211,6 +211,26 @@ export interface ProjectResponse {
   created_at: string
 }
 
+/** Answer from GET /datasets/resolve — does this filename exist for me? */
+export interface DatasetResolveResponse {
+  name: string
+  available: boolean
+  /** 'upload_dir' | 'registry' when available, else null. */
+  source: 'upload_dir' | 'registry' | null
+  size_bytes: number | null
+  dataset_id?: string
+}
+
+/** Answer from POST /datasets/upload. */
+export interface DatasetUploadResponse {
+  name: string
+  size_bytes: number
+  path: string
+  original_filename: string | null
+  content_type: string | null
+  status: string
+}
+
 export interface StorageStats {
   total_files: number
   total_bytes: number
@@ -636,6 +656,25 @@ export const api = {
   listDatasets: (projectId: string) =>
     request<unknown[]>(`/projects/${projectId}/datasets`),
 
+  /**
+   * Preflight probe run before a pipeline is queued. Returns
+   * `{ available: false }` rather than throwing when the dataset is missing,
+   * so callers can branch on the flag instead of catching.
+   */
+  resolveDataset: (name: string, workspaceId?: string) =>
+    request<DatasetResolveResponse>(`/datasets/resolve${qs({ name, workspace_id: workspaceId })}`),
+
+  /** Upload a dataset file so the worker can resolve it by filename. */
+  uploadDataset: (file: File, workspaceId?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    const query = qs({ workspace_id: workspaceId })
+    return request<DatasetUploadResponse>(`/datasets/upload${query}`, {
+      method: 'POST',
+      body: form,
+    })
+  },
+
   searchMemory: (query: string) =>
     request<MemorySearchResponse>(`/memory/search${qs({ query })}`),
 
@@ -703,6 +742,44 @@ export const api = {
     }),
 
   sandboxStatus: () => request<SandboxStatusResponse>('/sandbox/status'),
+
+  // ── Pipeline Planner ──────────────────────────────────────────────────────
+
+  generatePipelinePlan: (payload: {
+    description: string
+    dataset_name?: string
+    target_column?: string
+    task_type?: string
+  }) =>
+    request<{
+      task_type: string
+      target_metric: string
+      complexity: string
+      stages: Array<{
+        id: string
+        name: string
+        agent: string
+        role: string
+        description: string
+        inputs: string[]
+        outputs: string[]
+        estimated_duration: string
+        optional: boolean
+      }>
+      edges: Array<{ from_stage: string; to_stage: string; label: string }>
+      summary: string
+      assumptions: string[]
+      risks: string[]
+      source: string
+    }>('/pipeline/plan', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  pipelineStatus: () =>
+    request<{ available: boolean; llm_available: boolean; fallback_enabled: boolean }>(
+      '/pipeline/status',
+    ),
 }
 
 /**

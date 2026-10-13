@@ -4,6 +4,13 @@ from app.agents.discovery import DiscoveryAgent, discovery_node
 from app.agents.experimenter import MLExperimentAgent, experimenter_node
 from app.agents.model_selector import ModelSelectorAgent, model_selector_node
 from app.agents.orchestrator import orchestrator_node
+from app.agents.pipeline_planner import (
+    PipelinePlannerAgent,
+    PipelinePlanOutput,
+    PipelineStageOutput,
+    PipelineEdgeOutput,
+    pipeline_planner_node,
+)
 from app.agents.preprocessor import PreprocessorAgent, preprocessor_node
 from app.agents.profiler import ProfilerAgent, profiler_node
 from app.agents.schemas import (
@@ -28,6 +35,10 @@ __all__ = [
     "MLExperimentOutput",
     "ModelSelectorAgent",
     "ModelSpecOutput",
+    "PipelinePlannerAgent",
+    "PipelinePlanOutput",
+    "PipelineStageOutput",
+    "PipelineEdgeOutput",
     "PreprocessorAgent",
     "PreprocessingSpecOutput",
     "ProfilerAgent",
@@ -40,6 +51,7 @@ __all__ = [
     "initial_workflow_state",
     "model_selector_node",
     "orchestrator_node",
+    "pipeline_planner_node",
     "preprocessor_node",
     "profiler_node",
     "stage_update",

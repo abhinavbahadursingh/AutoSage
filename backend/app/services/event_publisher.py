@@ -22,12 +22,14 @@ from app.schemas.websocket import (
     AgentFailed,
     AgentStarted,
     AgentWarning,
+    DatasetRequired,
     ExperimentCompleted,
     ExperimentEvent,
     ExperimentFailed,
     ExperimentStarted,
     MLCompleted,
     MLStarted,
+    TargetRequired,
     VerificationCompleted,
     VerificationStarted,
 )
@@ -463,6 +465,50 @@ def publish_agent_warning(
         AgentWarning(
             experiment_id=experiment_id,
             payload={"agent_name": agent_name, "stage": stage, "warning": warning, "error": error},
+        ),
+    )
+
+
+def publish_dataset_required(
+    experiment_id: UUID,
+    dataset_name: str,
+    stage: str = "discovery",
+    reason: str = "dataset_not_found",
+) -> int:
+    """Tell the UI the run is parked waiting on a dataset upload."""
+    return get_event_publisher().publish_sync(
+        experiment_id,
+        DatasetRequired(
+            experiment_id=experiment_id,
+            payload={
+                "dataset_name": dataset_name,
+                "stage": stage,
+                "reason": reason,
+            },
+        ),
+    )
+
+
+def publish_target_required(
+    experiment_id: UUID,
+    reason: str,
+    status: str = "unresolved",
+    candidates: Optional[List[str]] = None,
+    columns: Optional[List[str]] = None,
+    stage: str = "profiler",
+) -> int:
+    """Tell the UI a target column must be chosen before training can run."""
+    return get_event_publisher().publish_sync(
+        experiment_id,
+        TargetRequired(
+            experiment_id=experiment_id,
+            payload={
+                "reason": reason,
+                "status": status,
+                "candidates": list(candidates or []),
+                "columns": list(columns or []),
+                "stage": stage,
+            },
         ),
     )
 

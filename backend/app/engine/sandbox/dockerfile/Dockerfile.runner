@@ -13,5 +13,3 @@ RUN pip install --no-cache-dir -r requirements-runner.txt
 COPY train_script.py /workspace/train_script.py
 
 USER autosage:autosage
-
-ENTRYPOINT ["python"]

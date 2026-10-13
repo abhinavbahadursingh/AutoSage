@@ -73,6 +73,14 @@ class DatasetNotFoundError(ToolExecutionError):
     """Raised when the dataset for a job cannot be located on disk."""
 
 
+class TargetColumnRequiredError(ToolExecutionError):
+    """Raised when a job reaches training without a validated target column.
+
+    Distinct from a training failure: the run is not retried, because the same
+    unresolved target would fail identically every time.
+    """
+
+
 def _upload_dir() -> Path:
     from app.core.config import settings
 
@@ -190,7 +198,8 @@ class ExecuteMLJobTool(BaseTool):
             "CANDIDATE_MODELS": json.dumps(params.families),
             "DATASET_NAME": params.dataset_name,
             "MODEL_PARAMS": json.dumps(params.params),
-            "TARGET_COLUMN": params.target_column or "target",
+            # Already validated against the real file; never default here.
+            "TARGET_COLUMN": params.target_column or "",
             "TASK_TYPE": params.task_type or "classification",
             "TEST_SIZE": str(params.test_size),
             "RANDOM_STATE": str(params.random_state),
@@ -206,6 +215,13 @@ class ExecuteMLJobTool(BaseTool):
         resolved = resolve_dataset_path(
             params.dataset_name, params.dataset_path, params.experiment_id
         )
+        if not params.target_column:
+            # Fail fast, before any sandbox or model work: an unresolved target
+            # is a user decision, not something a retry can fix.
+            raise TargetColumnRequiredError(
+                f"no target column was resolved for {params.dataset_name!r}; "
+                "training was not started"
+            )
         candidates = params.families
         task_type = params.task_type or "classification"
 
@@ -267,10 +283,17 @@ class ExecuteMLJobTool(BaseTool):
         task_type: str,
     ) -> Dict[str, Any]:
         """Train in the API/worker process (no Docker available)."""
+        if not params.target_column:
+            # No validated target: refuse rather than defaulting to a literal
+            # "target" column that is not in this dataset.
+            raise TargetColumnRequiredError(
+                "no target column was provided for training; the run was parked "
+                "before training because the target could not be resolved"
+            )
         try:
             result = execute_locally(
                 dataset_path=dataset_path,
-                target_column=params.target_column or "target",
+                target_column=params.target_column,
                 task_type=task_type,
                 candidates=candidates,
                 primary_metric=params.primary_metric,
@@ -290,6 +313,9 @@ class ExecuteMLJobTool(BaseTool):
             "status": "completed" if result.get("selected_model") else "no_model_selected",
             "dataset_path": dataset_path,
             "dataset_name": params.dataset_name,
+            # The exact column the trainer split on, so the run summary and
+            # the verifier agree with what was actually measured.
+            "target_column": result.get("target_column") or params.target_column,
             "model_family": params.model_family,
             "candidates": candidates,
             "primary_metric": result.get("primary_metric", params.primary_metric),

@@ -15,7 +15,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from pgvector.sqlalchemy import Vector
 
 revision: str = '962a8aa593b7'
 down_revision: Union[str, Sequence[str], None] = '0004_experiment_task_id'
@@ -53,7 +52,7 @@ def upgrade() -> None:
         sa.Column("achieved_metric_value", sa.Float(), nullable=True),
         sa.Column("metric_name", sa.String(100), nullable=True),
         sa.Column("memory_metadata", postgresql.JSONB(), nullable=False, server_default="{}"),
-        sa.Column("embedding", Vector(1536), nullable=True),
+        sa.Column("embedding", sa.JSON(), nullable=True),
         sa.Column("embedding_model", sa.String(100), nullable=True),
         sa.Column("access_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_accessed_at", sa.DateTime(), nullable=True),

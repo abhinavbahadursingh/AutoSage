@@ -48,6 +48,25 @@ class ExperimentWorkflowState(TypedDict, total=False):
     verification: Dict[str, Any]
     verification_passed: bool
 
+    # Set by the Discovery stage when the dataset search agent cannot resolve
+    # the run's dataset. The workflow then parks instead of training on a
+    # stand-in, and the UI prompts the user to upload the real file.
+    dataset_required: bool
+    dataset_missing_name: Optional[str]
+
+    # Real column metadata read from the dataset file by Discovery
+    # (names, kinds, cardinality). Drives target resolution.
+    dataset_schema: Dict[str, Any]
+
+    # Resolved target column, published by Profiling and consumed unchanged by
+    # every later stage. Empty until target resolution succeeds.
+    target_column: Optional[str]
+    # Verdict from app.engine.targeting: status is one of
+    # "resolved" / "ambiguous" / "unresolved".
+    target_resolution: Dict[str, Any]
+    # Set when the target must be chosen by the user before training.
+    target_required: bool
+
     # Test/ops hook: name of the stage that must raise (simulates failure).
     fail_stage: Optional[str]
 
@@ -91,6 +110,12 @@ def initial_workflow_state(
         "ml_result": {},
         "verification": {},
         "verification_passed": False,
+        "dataset_required": False,
+        "dataset_missing_name": None,
+        "dataset_schema": {},
+        "target_column": None,
+        "target_resolution": {},
+        "target_required": False,
         "fail_stage": fail_stage,
         "config": config,
         # Objective resolved from the request; every downstream stage reads it.

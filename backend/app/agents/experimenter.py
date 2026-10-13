@@ -81,14 +81,17 @@ class MLExperimentAgent(BaseAgent):
     def _training_inputs(self, state: ExperimentWorkflowState) -> Dict[str, Any]:
         """Resolve what to train on.
 
-        The request config is authoritative: it is what the user asked for.
-        Discovery/profiler output only fills the gaps (and can describe a
-        dataset the run never requested).
+        The target is the one Profiling validated against the real file
+        (``state["target_column"]``). If that is absent the run is parked
+        upstream, so there is nothing sensible to train against and we surface
+        the resolution error rather than falling back to a literal ``"target"``
+        that almost certainly does not exist.
         """
         config = state.get("config") or {}
         profile = state.get("profile") or {}
         dataset = state.get("dataset_info") or {}
         model_spec = state.get("model_spec") or {}
+        target = state.get("target_column") or profile.get("target_column") or dataset.get("target_column")
         return {
             "model_family": str(model_spec.get("family") or "gradient_boosting"),
             "dataset_name": str(
@@ -97,12 +100,8 @@ class MLExperimentAgent(BaseAgent):
                 or dataset.get("name")
                 or "dataset.csv"
             ),
-            "target_column": str(
-                config.get("target_column")
-                or dataset.get("target_column")
-                or profile.get("target_column")
-                or "target"
-            ),
+            # No fallback: an unvalidated target must not reach the trainer.
+            "target_column": str(target) if target else "",
             "task_type": str(
                 config.get("task_type") or profile.get("task_type") or "classification"
             ),
@@ -114,6 +113,14 @@ class MLExperimentAgent(BaseAgent):
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """Run the real training job once; returns (job data, failure reason)."""
         inputs = self._training_inputs(state)
+        if not inputs["target_column"]:
+            # Refuse to train rather than raise a ValueError deep in the
+            # trainer: no measurement, no fabricated score, actionable reason.
+            resolution = state.get("target_resolution") or {}
+            return None, (
+                f"target column was never resolved: "
+                f"{resolution.get('reason') or 'no target column selected'}"
+            )
         job = self.call_tool(
             "execute_ml_job",
             model_family=inputs["model_family"],
@@ -245,6 +252,10 @@ class MLExperimentAgent(BaseAgent):
                 "failures": dict((data or {}).get("failures") or {}),
                 "n_rows": (data or {}).get("n_rows"),
                 "n_features": (data or {}).get("n_features"),
+                # The column actually trained on, so the evaluator/verifier
+                # and the run summary all reference the same target.
+                "target_column": (data or {}).get("target_column")
+                or state.get("target_column"),
             }
         )
         return {

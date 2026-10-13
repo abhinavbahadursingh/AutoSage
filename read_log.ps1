@@ -1,0 +1,1 @@
+Get-Content "C:/Program Files/PostgreSQL/18/log/postgresql-18.log" -Tail 20

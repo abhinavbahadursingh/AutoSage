@@ -20,6 +20,7 @@ import pytest
 from celery.result import allow_join_result
 from fastapi.testclient import TestClient
 
+from app.agents.discovery import UNNAMED_DATASET_LABEL
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.main import app
@@ -143,27 +144,65 @@ def test_background_task_runs_workflow_to_completed(
     assert final.celery_task_id  # task id tracked on the row
 
 
-def test_background_task_abstains_without_a_dataset(
+def test_background_task_prompts_for_a_missing_dataset(
     patched_task_session: FakeAsyncSession, eager_celery: None
 ) -> None:
-    """No dataset => no fabricated score; the gate abstains and the run fails."""
+    """No dataset => the run parks at discovery and asks for the file.
+
+    Discovery now gates on real dataset availability, so the run stops before
+    profiling/training instead of training on nothing and abstaining later. No
+    score is fabricated either way.
+    """
     experiment = seed_experiment(patched_task_session, config={"dataset_name": "missing.csv"})
     result = run_task_inline(experiment.id)
 
     assert result["status"] == "FAILED"
-    summary = patched_task_session._store[Experiment][experiment.id].result_summary
+    row = patched_task_session._store[Experiment][experiment.id]
+    summary = row.result_summary
     assert summary["primary_score"] is None
     assert summary["selected_model"] is None
-    assert summary["verification"]["abstained"] is True
+    # Parked, not trained: the UI is prompted to upload the dataset.
+    assert summary["awaiting_dataset"] is True
+    assert summary["missing_dataset"] == "missing.csv"
+    assert row.error_detail == "dataset_required: missing.csv"
+    # The gate fired at discovery, so training never ran.
+    assert "ml_experiment" not in result["stages_completed"]
+
+
+def test_background_task_asks_when_no_dataset_was_named(
+    patched_task_session: FakeAsyncSession, eager_celery: None
+) -> None:
+    """A run submitted without a dataset parks and asks for one.
+
+    This is the default frontend path: the user hits Run with no file
+    attached. Discovery must ask rather than fall through to the catalog
+    stub, which would hand the pipeline the synthetic ``mock_dataset.csv``
+    and produce a score from rows that were never read.
+    """
+    experiment = seed_experiment(patched_task_session, config={"prompt": "predict churn"})
+    result = run_task_inline(experiment.id)
+
+    assert result["status"] == "FAILED"
+    row = patched_task_session._store[Experiment][experiment.id]
+    summary = row.result_summary
+    assert summary["awaiting_dataset"] is True
+    assert summary["missing_dataset"] == UNNAMED_DATASET_LABEL
+    assert summary["primary_score"] is None
+    assert summary["selected_model"] is None
+    # Parked at discovery: nothing downstream ran.
+    assert "ml_experiment" not in result["stages_completed"]
+    assert result["stages_completed"] == ["orchestrator", "discovery", "awaiting_dataset"]
 
 
 def test_task_retry_then_terminal_failure(
-    patched_task_session: FakeAsyncSession, eager_celery: None
+    patched_task_session: FakeAsyncSession, eager_celery: None, recall_experiment_config: dict
 ) -> None:
+    # A real dataset is required so the run clears discovery and actually
+    # reaches the injected ml_experiment failure.
     experiment = seed_experiment(
         patched_task_session,
         max_retries=1,
-        config={"mock_fail_stage": "ml_experiment"},
+        config={**recall_experiment_config, "mock_fail_stage": "ml_experiment"},
     )
     result = run_task_inline(experiment.id)
 

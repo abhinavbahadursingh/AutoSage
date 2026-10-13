@@ -557,6 +557,9 @@ def run_model_comparison(
         "failures": failures,
         "validation_strategy": "holdout",
         "task_type": task_type,
+        # The exact column the data was split on, after case/whitespace
+        # resolution. Downstream stages report *this*, not the requested
+        # spelling, so the trainer and the resolver can never disagree.
         "target_column": target_column,
         "n_rows": int(len(df)),
         "n_features": int(prepared[0].shape[1]),

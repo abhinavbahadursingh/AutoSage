@@ -81,6 +81,65 @@ def route_after_verification(state: ExperimentWorkflowState) -> RouteDecision:
     return "fail"
 
 
+def route_after_discovery(state: ExperimentWorkflowState) -> str:
+    """Park the run when the discovery agent could not find the dataset.
+
+    Continuing would profile and train on a stand-in, so the run stops here
+    and waits for the user to upload the real file.
+    """
+    if state.get("dataset_required"):
+        log_with_context(
+            logger, logging.WARNING, "workflow_dataset_required",
+            experiment=state.get("experiment_id"),
+            dataset=state.get("dataset_missing_name"),
+        )
+        return "awaiting_dataset"
+    return "profiler"
+
+
+def mark_awaiting_dataset(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Terminal node for a run parked on a missing dataset."""
+    missing = state.get("dataset_missing_name") or "dataset"
+    return {
+        "current_stage": "awaiting_dataset",
+        "stages_completed": ["awaiting_dataset"],
+        "events": [f"dataset upload required: {missing}"],
+        # Not COMPLETED and not a hard FAILED verdict: the UI offers the
+        # upload prompt and re-runs once the file is in place.
+        "status": "AWAITING_DATASET",
+    }
+
+
+def route_after_profiling(state: ExperimentWorkflowState) -> str:
+    """Park the run when the target column could not be resolved.
+
+    Training on an unverified target produces a meaningless score, so the run
+    stops and asks the user to choose (or corrects the request).
+    """
+    if state.get("target_required"):
+        resolution = state.get("target_resolution") or {}
+        log_with_context(
+            logger, logging.WARNING, "workflow_target_required",
+            experiment=state.get("experiment_id"),
+            status=resolution.get("status"),
+        )
+        return "awaiting_target"
+    return "preprocessor"
+
+
+def mark_awaiting_target(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Terminal node for a run parked on an unresolvable target column."""
+    resolution = state.get("target_resolution") or {}
+    reason = str(resolution.get("reason") or "target column could not be determined")
+    return {
+        "current_stage": "awaiting_target",
+        "stages_completed": ["awaiting_target"],
+        "events": [reason],
+        # No score is produced and nothing is trained: the UI asks the user.
+        "status": "AWAITING_TARGET",
+    }
+
+
 def mark_failed(state: ExperimentWorkflowState) -> Dict[str, Any]:
     """Terminal node for exhausted verification retries (status FAILED)."""
     return {
@@ -168,6 +227,33 @@ def _wrap_node_with_observability(node_func, stage: str):
                     _publish_safe(_pub_failed, exc)
                     raise
                 _publish_safe(_pub_completed, result)
+                if stage == "discovery" and result.get("dataset_required") and exp_uuid is not None:
+                    from app.services import event_publisher
+
+                    # Park the run and ask the UI for the dataset.
+                    _publish_safe(
+                        event_publisher.publish_dataset_required,
+                        experiment_id=exp_uuid,
+                        dataset_name=str(result.get("dataset_missing_name") or ""),
+                        stage="discovery",
+                    )
+                if stage == "profiler" and result.get("target_required") and exp_uuid is not None:
+                    from app.services import event_publisher
+
+                    resolution = result.get("target_resolution") or {}
+                    schema_columns = (state.get("dataset_schema") or {}).get("columns") or []
+                    # Ask the user to choose rather than guessing a target.
+                    _publish_safe(
+                        event_publisher.publish_target_required,
+                        experiment_id=exp_uuid,
+                        reason=str(resolution.get("reason") or "target column could not be determined"),
+                        status=str(resolution.get("status") or "unresolved"),
+                        candidates=list(resolution.get("candidate_names") or []),
+                        columns=[
+                            str(c.get("name")) for c in schema_columns if c.get("name")
+                        ],
+                        stage="profiler",
+                    )
                 if stage == "ml_experiment":
                     from app.services import event_publisher
 
@@ -212,11 +298,28 @@ def build_experiment_graph(checkpointer: Optional[Any] = None):  # type: ignore[
     workflow.add_node("ml_experiment", _wrap_node_with_observability(experimenter_node, "ml_experiment"))
     workflow.add_node("verification", _wrap_node_with_observability(verifier_node, "verification"))
     workflow.add_node("failed", _wrap_node_with_observability(mark_failed, "failed"))
+    workflow.add_node(
+        "awaiting_dataset",
+        _wrap_node_with_observability(mark_awaiting_dataset, "awaiting_dataset"),
+    )
+
+    workflow.add_node(
+        "awaiting_target",
+        _wrap_node_with_observability(mark_awaiting_target, "awaiting_target"),
+    )
 
     workflow.add_edge(START, "orchestrator")
     workflow.add_edge("orchestrator", "discovery")
-    workflow.add_edge("discovery", "profiler")
-    workflow.add_edge("profiler", "preprocessor")
+    workflow.add_conditional_edges(
+        "discovery",
+        route_after_discovery,
+        {"profiler": "profiler", "awaiting_dataset": "awaiting_dataset"},
+    )
+    workflow.add_conditional_edges(
+        "profiler",
+        route_after_profiling,
+        {"preprocessor": "preprocessor", "awaiting_target": "awaiting_target"},
+    )
     workflow.add_edge("preprocessor", "model_selector")
     workflow.add_edge("model_selector", "ml_experiment")
     workflow.add_edge("ml_experiment", "verification")
@@ -226,6 +329,8 @@ def build_experiment_graph(checkpointer: Optional[Any] = None):  # type: ignore[
         {"complete": END, "retry": "ml_experiment", "fail": "failed"},
     )
     workflow.add_edge("failed", END)
+    workflow.add_edge("awaiting_dataset", END)
+    workflow.add_edge("awaiting_target", END)
 
     return workflow.compile(checkpointer=checkpointer or MemorySaver())
 

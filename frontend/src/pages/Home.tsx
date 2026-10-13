@@ -111,7 +111,7 @@ function MagneticButton({ children, onClick, disabled, className = '', style = {
 
 export function HomePage() {
   const navigate = useNavigate()
-  const { createAndRun, busy, authReady, authError, user, setUser, setAuthError, toast } = useStore()
+  const { busy, authReady, authError, user, setUser, setAuthError, toast } = useStore()
   const [prompt, setPrompt] = useState('')
   const [loginBusy, setLoginBusy] = useState(false)
   const { visible, scrolled } = useNavScroll()
@@ -147,17 +147,9 @@ export function HomePage() {
 
   const start = async (text?: string) => {
     const body = (text ?? prompt).trim() || EXAMPLE
-    try {
-      await createAndRun({
-        prompt: body,
-        dataset: 'telco_churn_2024.csv',
-        target: 'churn',
-        metric: 'recall',
-        budget: '12 fit-min',
-        verificationLevel: 'strict',
-      })
-      navigate('/workspace')
-    } catch { /* toast already shown */ }
+    // No dataset is invented here: hand the prompt to the experiment form,
+    // where the user picks the file whose name becomes the dataset id.
+    navigate('/new', { state: { prompt: body } })
   }
 
   return (

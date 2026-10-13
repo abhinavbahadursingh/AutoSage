@@ -133,6 +133,36 @@ class VerificationCompleted(EventBase):
     payload: VerificationCompletedPayload
 
 
+# ---- Dataset events ----
+
+class DatasetRequiredPayload(BaseModel):
+    """Discovery could not resolve the run's dataset; the UI must prompt."""
+
+    dataset_name: str
+    stage: str = "discovery"
+    reason: str = "dataset_not_found"
+
+
+class DatasetRequired(EventBase):
+    event_type: Literal["dataset.required"] = "dataset.required"
+    payload: DatasetRequiredPayload
+
+
+class TargetRequiredPayload(BaseModel):
+    """The target column must be chosen by the user before training."""
+
+    reason: str
+    status: str = "unresolved"
+    candidates: List[str] = Field(default_factory=list)
+    columns: List[str] = Field(default_factory=list)
+    stage: str = "profiler"
+
+
+class TargetRequired(EventBase):
+    event_type: Literal["target.required"] = "target.required"
+    payload: TargetRequiredPayload
+
+
 # ---- ML training events ----
 
 class MLStartedPayload(BaseModel):
@@ -170,6 +200,8 @@ ExperimentEvent = (
     | AgentCompleted
     | AgentFailed
     | AgentWarning
+    | DatasetRequired
+    | TargetRequired
     | VerificationStarted
     | VerificationCompleted
     | MLStarted

@@ -299,7 +299,7 @@ class SandboxManager:
                     str(workspace): {"bind": "/workspace", "mode": "rw"}
                 },
                 working_dir="/workspace",
-                cpu_count=self.cpu_limit,
+                cpu_count=int(self.cpu_limit),
                 mem_limit=self.memory_limit,
                 memswap_limit=self.memory_limit,  # Disable swap
                 network_mode="none",  # No network access
@@ -308,7 +308,6 @@ class SandboxManager:
                 stdout=True,
                 stderr=True,
                 environment=env,
-                tmpfs={"/workspace": f"size={self.workspace_size},exec,nosuid,nodev"},
                 security_opt=security_opts,
                 cap_drop=["ALL"],
                 pids_limit=self.pids_limit,

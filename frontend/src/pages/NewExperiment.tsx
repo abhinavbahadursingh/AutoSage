@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { CornerDownLeft, Cpu, Database, Gauge, ShieldCheck, Sparkles, Zap } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { CornerDownLeft, Cpu, Database, FileUp, Gauge, Loader2, ShieldCheck, Sparkles, X, Zap } from 'lucide-react'
 import { useStore } from '../store/context'
-import { DATASETS } from '../data/catalog'
+import { DatasetUploadDialog } from '../components/datasets/DatasetUploadDialog'
+import { api } from '../lib/api'
 import type { VerificationLevel } from '../lib/types'
 
 const EXAMPLES = [
@@ -25,14 +26,8 @@ const METRICS = [
 
 const BUDGETS = ['5 fit-min', '12 fit-min', '20 fit-min', '45 fit-min', '90 fit-min']
 
-const TARGETS_BY_DATASET: Record<string, string[]> = {
-  'telco_churn_2024.csv': ['churn', 'customerID', 'Contract', 'MonthlyCharges'],
-  'lending_applications_q3.csv': ['defaulted', 'loan_amount', 'dti', 'income'],
-  'tickets_2026H1.jsonl': ['teams', 'body', 'subject', 'priority'],
-  'deliveries_eu.parquet': ['eta_minutes', 'market', 'delivered_at', 'courier_id'],
-  'txns_fraud_aug.csv': ['is_fraud', 'amount', 'merchant_category', 'auth_score_v2'],
-  'admissions_2025.csv': ['readmitted_30d', 'patient_id', 'site', 'los_days'],
-}
+/** Extensions the backend accepts (mirrors settings.ALLOWED_UPLOAD_TYPES). */
+const DATASET_ACCEPT = '.csv,.tsv,.txt,text/csv,application/csv,text/plain'
 
 const LEVELS: { id: VerificationLevel; label: string; hint: string }[] = [
   { id: 'fast', label: 'Fast', hint: 'sampled recompute' },
@@ -92,46 +87,99 @@ function Control({
 const selectCls =
   'h-[30px] w-full rounded-sm border border-ink-600 bg-ink-850 px-2 text-[15px] text-paper-100 outline-none transition hover:border-ink-500 focus:border-accent-500'
 
+const inputCls = `${selectCls} placeholder:text-paper-500`
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
 export function NewExperimentPage() {
   const navigate = useNavigate()
   const { createAndRun, memory, memoryLoading, busy } = useStore()
-  const [prompt, setPrompt] = useState(EXAMPLES[0])
-  const [dataset, setDataset] = useState(DATASETS[0]?.name ?? '')
+  // The landing page can hand a drafted prompt over via router state.
+  const incoming = (useLocation().state as { prompt?: string } | null)?.prompt
+  const [prompt, setPrompt] = useState(incoming?.trim() || EXAMPLES[0])
+  // The dataset the user picked. Its filename is the identifier the pipeline
+  // resolves against — nothing is hardcoded, so any CSV works.
+  const [file, setFile] = useState<File | null>(null)
   const [target, setTarget] = useState('churn')
   const [metric, setMetric] = useState('recall')
   const [budget, setBudget] = useState('12 fit-min')
   const [level, setLevel] = useState<VerificationLevel>('strict')
   const [submitting, setSubmitting] = useState(false)
+  // Set when a picked dataset could not be stored; reopens the upload prompt.
+  const [failedUpload, setFailedUpload] = useState<File | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const resuming = useRef(false)
+
+  const dataset = file?.name ?? ''
 
   const analysis = useMemo(() => analyze(prompt), [prompt])
-  const targets = TARGETS_BY_DATASET[dataset] ?? ['target']
   const memoryHits = memory.filter((m) =>
     analysis.keywords.some((k) => m.tags.join(' ').includes(k) || m.experiment.toLowerCase().includes(k)),
   )
 
-  const onDataset = (name: string) => {
-    setDataset(name)
-    const t = TARGETS_BY_DATASET[name]
-    if (t) setTarget(t[0])
+  const onFile = (next: File | null) => {
+    setFile(next)
+    if (!next) setFailedUpload(null)
+  }
+
+  // Create the run under a dataset name resolved by the caller.
+  const runWith = async (name: string) => {
+    await createAndRun({
+      prompt: prompt.trim(),
+      dataset: name,
+      target,
+      metric,
+      budget,
+      verificationLevel: level,
+    })
+    navigate('/workspace')
   }
 
   const submit = async () => {
     if (!prompt.trim() || submitting || busy) return
     setSubmitting(true)
+    // An attached dataset is a shortcut, not a requirement: when one is
+    // picked we upload it up front so the run never has to ask. Otherwise we
+    // start the run with no dataset and the discovery agent asks for one
+    // when it executes — see Workspace's dataset upload dialog.
+    let name = ''
+    if (file) {
+      try {
+        const stored = await api.uploadDataset(file)
+        // The backend sanitizes the filename, so use what it actually stored.
+        name = stored.name || file.name
+      } catch {
+        setFailedUpload(file)
+        setSubmitting(false)
+        return
+      }
+    }
     try {
-      await createAndRun({
-        prompt: prompt.trim(),
-        dataset,
-        target,
-        metric,
-        budget,
-        verificationLevel: level,
-      })
-      navigate('/workspace')
+      await runWith(name)
     } catch {
       /* toast already shown by store */
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  // Retry from the upload dialog after a failed store.
+  const onUploaded = async (storedName: string) => {
+    if (resuming.current) return
+    resuming.current = true
+    setFailedUpload(null)
+    setSubmitting(true)
+    try {
+      await runWith(storedName)
+    } catch {
+      /* toast already shown by store */
+    } finally {
+      setSubmitting(false)
+      resuming.current = false
     }
   }
 
@@ -198,22 +246,50 @@ export function NewExperimentPage() {
 
         <div className="grid grid-cols-2 gap-3 rounded-md border border-ink-600 bg-ink-900 px-4 py-3.5 md:grid-cols-3 xl:grid-cols-5">
           <Control icon={<Database size={11} />} label="Dataset">
-            <select className={selectCls} value={dataset} onChange={(e) => onDataset(e.target.value)}>
-              {DATASETS.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+            {file ? (
+              <div className="flex h-[30px] items-center gap-1.5 rounded-sm border border-accent-500/50 bg-accent-900/30 px-2">
+                <FileUp size={12} className="shrink-0 text-accent-300" />
+                <span className="mono min-w-0 flex-1 truncate text-[14px] text-paper-100" title={file.name}>
+                  {file.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onFile(null)}
+                  aria-label="Remove dataset"
+                  className="shrink-0 text-paper-500 transition hover:text-paper-100"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex h-[30px] items-center justify-center gap-1.5 rounded-sm border border-dashed border-ink-500 bg-ink-850 px-2 text-[14px] text-paper-300 transition hover:border-accent-500 hover:text-paper-100"
+              >
+                <FileUp size={12} />
+                Upload file
+              </button>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={DATASET_ACCEPT}
+              className="hidden"
+              onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+            />
+            <span className="mono text-[11.5px] text-paper-500">
+              {file ? fmtBytes(file.size) : 'CSV · filename is the dataset id'}
+            </span>
           </Control>
           <Control icon={<Zap size={11} />} label="Target column">
-            <select className={selectCls} value={target} onChange={(e) => setTarget(e.target.value)}>
-              {targets.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+            <input
+              className={inputCls}
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder="target"
+              spellCheck={false}
+            />
           </Control>
           <Control icon={<Gauge size={11} />} label="Evaluation metric">
             <select className={selectCls} value={metric} onChange={(e) => setMetric(e.target.value)}>
@@ -270,7 +346,16 @@ export function NewExperimentPage() {
                     : 'need a fuller description (24+ chars)'
                 }
               />
-              <Preflight ok={Boolean(dataset)} label="Dataset selected" value={dataset || '—'} />
+              <Preflight
+                ok={Boolean(dataset)}
+                partial={!dataset}
+                label="Dataset"
+                value={
+                  dataset
+                    ? `${dataset} · uploading now`
+                    : 'not attached — the discovery agent will ask for one'
+                }
+              />
               <Preflight
                 ok={analysis.wantsCompare}
                 partial={!analysis.wantsCompare}
@@ -324,13 +409,32 @@ export function NewExperimentPage() {
               disabled={!prompt.trim() || submitting || busy}
               className="mt-4 flex h-[38px] items-center justify-center gap-2 rounded-sm border border-accent-500 bg-accent-500 text-[16px] font-semibold text-ink-950 transition hover:bg-accent-400 disabled:cursor-not-allowed disabled:border-ink-600 disabled:bg-ink-750 disabled:text-paper-500"
             >
-              {submitting || busy ? 'Creating…' : 'Run Experiment'}
-              <CornerDownLeft size={13} />
+              {submitting || busy ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  {file ? 'Uploading…' : 'Starting…'}
+                </>
+              ) : (
+                <>
+                  Run Experiment
+                  <CornerDownLeft size={13} />
+                </>
+              )}
             </button>
-            <p className="mono mt-2 text-center text-[12px] text-paper-500">⌘/Ctrl + Enter</p>
+            <p className="mono mt-2 text-center text-[12px] text-paper-500">
+              ⌘/Ctrl + Enter
+            </p>
           </div>
         </div>
       </div>
+
+      {failedUpload && (
+        <DatasetUploadDialog
+          datasetName={failedUpload.name}
+          onClose={() => setFailedUpload(null)}
+          onUploaded={(name) => void onUploaded(name)}
+        />
+      )}
     </div>
   )
 }

@@ -68,6 +68,13 @@ export interface StoreValue {
   elapsedLabel: string
   /** Live stage from WS/poll for the active experiment */
   liveStage: StageId | null
+
+  /**
+   * Set when the discovery agent parks a run because it could not resolve the
+   * dataset. Non-null opens the upload prompt; upload + `run()` resumes it.
+   */
+  datasetRequest: { experimentId: string; name: string } | null
+  clearDatasetRequest: () => void
 }
 
 export const Ctx = createContext<StoreValue | null>(null)

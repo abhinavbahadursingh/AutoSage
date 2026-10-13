@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Database,
   FlaskConical,
+  GitBranch,
   LayoutGrid,
   Library,
   LogOut,
@@ -37,6 +38,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Operate',
     items: [
       { to: '/workspace', label: 'Workspace', icon: LayoutGrid },
+      { to: '/pipeline', label: 'Pipeline', icon: GitBranch },
       { to: '/sandbox', label: 'Sandbox', icon: Terminal },
       { to: '/experiments', label: 'Experiments', icon: FlaskConical },
     ],

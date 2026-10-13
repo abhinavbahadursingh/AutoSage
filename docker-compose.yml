@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: autosage-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autosage_dev_password}
+      POSTGRES_DB: autosage
+    ports:
+      - "5432:5432"
+    volumes:
+      - autosage_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d autosage"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: autosage-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - autosage_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  autosage_postgres_data:
+  autosage_redis_data:

@@ -6,19 +6,25 @@ WebSocket events → DB persistence → frontend re-render.
 
 ---
 
-## 1. Frontend — button click (`frontend/src/pages/NewExperiment.tsx:322`)
+## 1. Frontend — button click (`frontend/src/pages/NewExperiment.tsx`)
 
-The `Run Experiment` button calls `submit()` (line 118) after Cmd/Ctrl+Enter or click:
+The `Run Experiment` button calls `submit()` after Cmd/Ctrl+Enter or click:
 
 - Guard: `if (!prompt.trim() || submitting || busy) return` — no double-submit.
-- `setSubmitting(true)` swaps the label to `Creating…` and disables the button.
-- Calls `createAndRun({ prompt, dataset, target, metric, budget, verificationLevel })` from the store.
+- `setSubmitting(true)` swaps the label to "Uploading…" / "Starting…" and disables the button.
+- **The dataset is optional.** When a file is attached it is uploaded first
+  (`POST /datasets/upload`) so the run never has to ask; when none is attached the
+  run starts immediately with **no** dataset in its config, and the discovery agent
+  asks for one when it executes (§8, `route_after_discovery`). There is no file
+  picker forced on the user at click time.
+- Calls `createAndRun({ prompt, dataset, target, metric, budget, verificationLevel })`
+  from the store, where `dataset` is `''` when nothing is attached.
 - On success: `navigate('/workspace')`. Failures surface via a toast only.
 
 The page itself shows a **Preflight** panel: a client-side `analyze()` heuristic derives
 task type / metric hint / compare intent; a `memory` match list and a "POST /experiments →
 start · JWT Bearer" backend hint. Note: `budget` and `verificationLevel` are UI-only — they
-are **not** sent to the API (line 235, 254).
+are **not** sent to the API.
 
 ## 2. Store — `createAndRun` (`frontend/src/store/store.tsx:504`)
 
@@ -159,9 +165,30 @@ START → orchestrator → discovery → profiler → preprocessor → model_sel
 - `route_after_verification`: `verification_passed` → `"complete"`; else while
   `attempt < max_attempts` → `"retry"` (loops back to `ml_experiment`); otherwise `"fail"`
   → `mark_failed` terminal node → `status='FAILED'`, `stages_completed=['failed']`.
+- `route_after_discovery`: when the dataset gate fired (`dataset_required`) →
+  `"awaiting_dataset"` → `mark_awaiting_dataset` → `status='AWAITING_DATASET'`; otherwise
+  `"profiler"`.
 - `thread_id_for`: `experiment-<uuid>`.
 - `STAGE_ORDER` (canonical): `orchestrator, discovery, profiler, preprocessor, model_selector,
   ml_experiment, verification` — mirrored in the frontend's `BACKEND_STAGE_MAP`.
+
+### The dataset gate (important)
+
+`DiscoveryAgent.run` parks the run — before any LLM or catalog lookup — whenever the
+run's dataset cannot actually be resolved. That covers two cases:
+
+1. A name was given but the file is not resolvable (`missing.csv`).
+2. **No name was given at all** — the default path when the user submits a run with no
+   file attached. The gate emits `dataset_name = UNNAMED_DATASET_LABEL`
+   (`"no dataset selected"`), a prompt for the user rather than a filename.
+
+Both return `source_type='missing'` → `dataset_required=True`. Case 2 matters: an empty
+name previously fell through to the catalog stub, which answered with the synthetic
+`mock_dataset.csv`, so the pipeline "trained" on rows that were never read and the run
+failed much later at verification. Asking is honest; inventing is not.
+
+The gate holds on the LLM path too — it runs before `super().run(state)`, so a configured
+provider cannot bypass it.
 
 ### Node semantics (all degrade to deterministic heuristics when no LLM provider is configured —
 `LLM_ALLOW_HEURISTIC_FALLBACK=True`):
@@ -284,6 +311,22 @@ For the active experiment:
 - Cancel (`POST /experiments/{id}/cancel`): best-effort Celery revoke +
   `CANCELLED` transition; a queued task that was already delivered no-ops on pickup.
 - Worker hard/soft time limits: 1800s/1500s. Task-level `max_retries=10` is a backstop.
+
+### Resuming a run parked on the dataset
+
+A parked run is persisted as `FAILED` (the only non-terminal restable state) with
+`error_detail = "dataset_required: <name>"` and `result_summary.awaiting_dataset = true`
+plus `missing_dataset`. `experiment.completed` is *not* published — nothing finished.
+
+1. The store receives the `dataset.required` WS event (or, without WS, the poller sees
+   `awaiting_dataset`) and sets `datasetRequest`, which mounts `DatasetUploadDialog`.
+2. The user picks/drops a file; `POST /datasets/upload` stores it and returns the
+   sanitized filename.
+3. `Workspace.resumeRun` **PATCHes `config` with `dataset`/`dataset_name = <stored name>`**
+   and only then calls `POST /experiments/{id}/start`. The PATCH is required: `start`
+   archives the old `result_summary` under `history` and resets status, but it never
+   rewrites config — without it discovery would re-park on the same missing name forever.
+4. The run restarts from the top and the dialog closes.
 
 ## 15. Invariants / "no fake progress" guarantees
 
