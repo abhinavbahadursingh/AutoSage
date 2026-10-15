@@ -1,32 +1,63 @@
-# React + TypeScript + Vite
+# AutoSage Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Vite 8 + React 19 + TypeScript SPA. Full project documentation lives in the
+[repository README](../README.md) (product surface, API, environment variables,
+core flows).
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Vite 8** + **React 19** + **TypeScript**, **React Router 7**
+- **Tailwind CSS 4**, **framer-motion**, **@xyflow/react** (graphs)
+- **Monaco** (`@monaco-editor/react` bound to the locally bundled
+  `monaco-editor` — no CDN, workers via `?worker` imports)
+- **oxlint** for linting, `playwright-core` for headless verification probes
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+cp .env.example .env.local        # defaults are correct for local dev
+npm run dev                       # http://localhost:5173
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The dev server proxies `/api` and `/health` to `VITE_BACKEND_ORIGIN`
+(default `http://127.0.0.1:8000`) — requests are same-origin, so no CORS setup
+is needed in development. SSE responses on `/stream` are exempted from proxy
+buffering so verification frames arrive in real time.
+
+## Commands
+
+```bash
+npm run dev      # Vite dev server (port 5173)
+npx tsc -b       # type checking (also runs inside build)
+npm run lint      # oxlint
+npm run build     # tsc -b && vite build
+npm run preview   # serve the production build
+```
+
+## Layout
+
+```
+src/
+├── App.tsx              # routes, protected layout, page transitions
+├── pages/               # one file per route (Objectives, Pipeline, Sandbox, Evidence, ...)
+├── components/
+│   ├── layout/          # Sidebar, PageHeader
+│   ├── workspace/       # SandboxIDE, MonacoCodeEditor, FileTabs, Terminal
+│   ├── verification/    # ObjectiveViews (objectives, checks, report, decisions)
+│   ├── pipeline/ graph/ # plan analysis panel, pipeline graphs
+│   └── ui/ anim/        # theme, toasts, transitions, motion primitives
+├── lib/
+│   ├── api.ts           # fetch client: base resolution, Bearer/dev-token auth, SSE
+│   ├── objectiveRun.ts  # current run pointer (sessionStorage)
+│   ├── pipelinePlanStore.ts
+│   └── monacoSetup.ts   # loader.config({ monaco }) — local bundle
+└── store/               # StoreProvider/useStore (auth, experiment stream + polling)
+```
+
+## Notes
+
+- The production API base is `VITE_API_BASE_URL` (or `VITE_BACKEND_ORIGIN` + `/api/v1`).
+- The local dev-token minter (`POST /auth/dev-token`) is only ever called from
+  localhost or with `VITE_ALLOW_DEV_TOKEN=true`; production backends answer 404 there.
+- Monaco is bundled locally, so the main JS chunk is ~5 MB (~1.3 MB gzip).

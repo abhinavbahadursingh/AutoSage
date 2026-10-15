@@ -5,12 +5,61 @@ export function EmptyState({
   title,
   detail,
   action,
+  variant = 'plain',
 }: {
   icon?: ReactNode
   title: string
   detail?: string
   action?: ReactNode
+  /**
+   * `plain` is the compact inline state used between content.
+   * `feature` is the surface's own landing state — a framed glass panel with a
+   * dot-grid wash, for pages where "nothing here yet" is what the visitor sees
+   * first. Opt-in; every existing call site keeps `plain`.
+   */
+  variant?: 'plain' | 'feature'
 }) {
+  if (variant === 'feature') {
+    return (
+      <div className="flex items-center justify-center px-6 py-14">
+        <div
+          className="glass relative w-full max-w-[560px] overflow-hidden rounded-3xl px-8 py-12 text-center"
+          style={{ borderColor: 'var(--as-glass-border)' }}
+        >
+          <div className="grid-fade pointer-events-none absolute inset-0 opacity-60" aria-hidden />
+          <div
+            className="pointer-events-none absolute -top-28 left-1/2 h-56 w-[460px] -translate-x-1/2 rounded-full"
+            style={{
+              background: 'radial-gradient(closest-side, var(--as-accent-glow), transparent)',
+            }}
+            aria-hidden
+          />
+          <div className="relative">
+            <div
+              className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border"
+              style={{
+                background: 'color-mix(in oklch, var(--as-accent) 10%, transparent)',
+                borderColor: 'color-mix(in oklch, var(--as-accent) 26%, transparent)',
+                color: 'var(--as-accent-hi)',
+              }}
+            >
+              {icon}
+            </div>
+            <div className="text-[17px] font-semibold tracking-tight" style={{ color: 'var(--as-text)' }}>
+              {title}
+            </div>
+            {detail && (
+              <p className="mx-auto mt-2 max-w-[46ch] text-[14px] leading-relaxed" style={{ color: 'var(--as-text-2)' }}>
+                {detail}
+              </p>
+            )}
+            {action && <div className="mt-6 flex justify-center">{action}</div>}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col items-center justify-center gap-2.5 px-6 py-16 text-center">
       <div
@@ -23,9 +72,9 @@ export function EmptyState({
       >
         {icon}
       </div>
-      <div className="text-[16px] font-semibold" style={{ color: 'var(--as-text-2)' }}>{title}</div>
+      <div className="text-[16px] font-semibold tracking-tight" style={{ color: 'var(--as-text)' }}>{title}</div>
       {detail && (
-        <div className="max-w-sm text-[14.5px] leading-relaxed" style={{ color: 'var(--as-text-3)' }}>
+        <div className="max-w-sm text-[14.5px] leading-relaxed" style={{ color: 'var(--as-text-2)' }}>
           {detail}
         </div>
       )}

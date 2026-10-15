@@ -5,12 +5,7 @@ import {
   Loader2,
   AlertTriangle,
   CheckCircle2,
-  Circle,
-  ArrowDown,
-  Clock,
   Bot,
-  Database,
-  Shield,
   Zap,
   GitBranch,
   RotateCcw,
@@ -18,39 +13,18 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '../components/layout/Sidebar'
 import { Badge } from '../components/ui/Badge'
+import { PlannedPipelineGraph } from '../components/graph/PlannedPipelineGraph'
+import { PlanActions } from '../components/pipeline/PlanActions'
+import { PlanAnalysisPanel } from '../components/pipeline/PlanAnalysisPanel'
+import type { PipelinePlan, PipelineStage } from '../data/plannedGraph'
 import { api, ApiError } from '../lib/api'
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface PipelineStage {
-  id: string
-  name: string
-  agent: string
-  role: string
-  description: string
-  inputs: string[]
-  outputs: string[]
-  estimated_duration: string
-  optional: boolean
-}
-
-interface PipelineEdge {
-  from_stage: string
-  to_stage: string
-  label: string
-}
-
-interface PipelinePlan {
-  task_type: string
-  target_metric: string
-  complexity: string
-  stages: PipelineStage[]
-  edges: PipelineEdge[]
-  summary: string
-  assumptions: string[]
-  risks: string[]
-  source: string
-}
+import {
+  clearPipelinePlanDraft,
+  getPipelinePlanDraft,
+  setPipelinePlanDraft,
+  subscribePipelinePlanDraft,
+  type PipelinePlanDraft,
+} from '../lib/pipelinePlanStore'
 
 // ── Example prompts ──────────────────────────────────────────────────────────
 
@@ -77,179 +51,7 @@ function complexityBg(c: string): string {
   return 'bg-rose-400/10 border-rose-400/30'
 }
 
-// ── Pipeline Graph Component ─────────────────────────────────────────────────
-
-function PipelineGraph({
-  plan,
-  selectedStage,
-  onSelectStage,
-}: {
-  plan: PipelinePlan
-  selectedStage: string | null
-  onSelectStage: (id: string) => void
-}) {
-  const stageMap = useMemo(() => {
-    const m = new Map<string, PipelineStage>()
-    plan.stages.forEach((s) => m.set(s.id, s))
-    return m
-  }, [plan.stages])
-
-  // Build adjacency for rendering
-  const outgoing = useMemo(() => {
-    const m = new Map<string, string[]>()
-    plan.edges.forEach((e) => {
-      const arr = m.get(e.from_stage) ?? []
-      arr.push(e.to_stage)
-      m.set(e.from_stage, arr)
-    })
-    return m
-  }, [plan.edges])
-
-  const incoming = useMemo(() => {
-    const m = new Map<string, string[]>()
-    plan.edges.forEach((e) => {
-      const arr = m.get(e.to_stage) ?? []
-      arr.push(e.from_stage)
-      m.set(e.to_stage, arr)
-    })
-    return m
-  }, [plan.edges])
-
-  // Find root stages (no incoming edges)
-  const roots = useMemo(() => {
-    const hasIncoming = new Set(plan.edges.map((e) => e.to_stage))
-    return plan.stages.filter((s) => !hasIncoming.has(s.id))
-  }, [plan.stages, plan.edges])
-
-  // BFS to assign levels (columns) for layout
-  const levels = useMemo(() => {
-    const lvl = new Map<string, number>()
-    const queue: string[] = []
-    roots.forEach((r) => {
-      lvl.set(r.id, 0)
-      queue.push(r.id)
-    })
-    // Also handle stages not reachable from roots
-    plan.stages.forEach((s) => {
-      if (!lvl.has(s.id)) {
-        lvl.set(s.id, 0)
-        queue.push(s.id)
-      }
-    })
-    while (queue.length > 0) {
-      const cur = queue.shift()!
-      const curLvl = lvl.get(cur) ?? 0
-      const next = outgoing.get(cur) ?? []
-      for (const n of next) {
-        const existing = lvl.get(n) ?? 0
-        if (curLvl + 1 > existing) {
-          lvl.set(n, curLvl + 1)
-          queue.push(n)
-        }
-      }
-    }
-    return lvl
-  }, [plan.stages, plan.edges, roots, outgoing])
-
-  // Group stages by level
-  const columns = useMemo(() => {
-    const cols = new Map<number, PipelineStage[]>()
-    plan.stages.forEach((s) => {
-      const l = levels.get(s.id) ?? 0
-      const arr = cols.get(l) ?? []
-      arr.push(s)
-      cols.set(l, arr)
-    })
-    // Sort each column by name for stability
-    cols.forEach((arr) => arr.sort((a, b) => a.name.localeCompare(b.name)))
-    return cols
-  }, [plan.stages, levels])
-
-  const maxLevel = useMemo(() => {
-    let max = 0
-    levels.forEach((v) => {
-      if (v > max) max = v
-    })
-    return max
-  }, [levels])
-
-  // Edge label lookup
-  const edgeLabels = useMemo(() => {
-    const m = new Map<string, string>()
-    plan.edges.forEach((e) => {
-      m.set(`${e.from_stage}->${e.to_stage}`, e.label)
-    })
-    return m
-  }, [plan.edges])
-
-  return (
-    <div className="overflow-x-auto">
-      <div className="flex items-start gap-0 min-w-max">
-        {Array.from({ length: maxLevel + 1 }).map((_, colIdx) => {
-          const stages = columns.get(colIdx) ?? []
-          return (
-            <div key={colIdx} className="flex flex-col items-center">
-              {/* Column stages */}
-              <div className="flex flex-col gap-3">
-                {stages.map((stage) => {
-                  const isSelected = selectedStage === stage.id
-                  const isOptional = stage.optional
-                  return (
-                    <button
-                      key={stage.id}
-                      onClick={() => onSelectStage(stage.id)}
-                      className={`group relative flex flex-col items-center rounded-xl border px-4 py-3 text-left transition-all duration-200 min-w-[180px] max-w-[220px] ${
-                        isSelected
-                          ? 'border-violet-400/60 bg-violet-400/10 shadow-[0_0_20px_rgba(139,92,246,0.15)]'
-                          : 'border-[var(--as-border)] bg-[var(--as-glass-bg)] hover:border-[var(--as-border-hi)] hover:bg-[var(--as-glass-bg-2)]'
-                      }`}
-                    >
-                      {isOptional && (
-                        <span className="absolute -top-1.5 -right-1.5">
-                          <Badge tone="dim">optional</Badge>
-                        </span>
-                      )}
-                      <div className="flex items-center gap-2 mb-1">
-                        <Bot
-                          size={13}
-                          className={isSelected ? 'text-violet-400' : 'text-[var(--as-text-3)]'}
-                        />
-                        <span
-                          className={`text-[13px] font-semibold ${
-                            isSelected ? 'text-violet-300' : 'text-[var(--as-text)]'
-                          }`}
-                        >
-                          {stage.name}
-                        </span>
-                      </div>
-                      <span className="text-[11px] text-[var(--as-text-3)] mb-1">{stage.agent}</span>
-                      <span className="text-[11.5px] text-[var(--as-text-2)] text-center leading-tight">
-                        {stage.description}
-                      </span>
-                      <div className="mt-2 flex items-center gap-1 text-[10.5px] text-[var(--as-text-3)]">
-                        <Clock size={10} />
-                        {stage.estimated_duration}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-
-              {/* Arrow to next column */}
-              {colIdx < maxLevel && (
-                <div className="flex items-center justify-center py-2">
-                  <ArrowDown size={16} className="text-[var(--as-text-3)]" />
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-// ── Stage Detail Panel ───────────────────────────────────────────────────────
+// ── Stage Detail ─────────────────────────────────────────────────────────────
 
 function StageDetail({ stage }: { stage: PipelineStage }) {
   return (
@@ -303,6 +105,22 @@ function StageDetail({ stage }: { stage: PipelineStage }) {
           </div>
         </div>
       )}
+
+      {stage.outputs.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-[var(--as-border)]">
+          <span className="text-[11px] text-[var(--as-text-3)] uppercase tracking-wider">Outputs</span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {stage.outputs.map((out) => (
+              <span
+                key={out}
+                className="mono text-[11px] px-1.5 py-0.5 rounded bg-[var(--as-glass-bg-2)] border border-[var(--as-border)] text-[var(--as-text-2)]"
+              >
+                {out}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </motion.div>
   )
 }
@@ -311,10 +129,19 @@ function StageDetail({ stage }: { stage: PipelineStage }) {
 
 export function PipelinePage() {
   const [description, setDescription] = useState('')
+  // The planner endpoint accepts these three as planning context. Leaving them
+  // empty sends the backend blank strings, exactly as before — they only sharpen
+  // the plan when the user actually supplies them.
+  const [datasetName, setDatasetName] = useState('')
+  const [targetColumn, setTargetColumn] = useState('')
+  const [taskType, setTaskType] = useState('')
   const [plan, setPlan] = useState<PipelinePlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedStage, setSelectedStage] = useState<string | null>(null)
+  // Run id of the Generate & Verify session that handed this plan over, if any.
+  const [originRunId, setOriginRunId] = useState<string | null>(null)
+  const appliedDraftRef = useRef<string | null>(null)
   const [plannerStatus, setPlannerStatus] = useState<{
     available: boolean
     llm_available: boolean
@@ -329,15 +156,47 @@ export function PipelinePage() {
       .catch(() => setPlannerStatus(null))
   }, [])
 
+  // Adopt the plan handed over by "Generate & Verify" (the Objectives page
+  // plans the same problem in the background). Each draft is applied once —
+  // a plan generated here by hand is not clobbered by an older draft.
+  useEffect(() => {
+    const adopt = (draft: PipelinePlanDraft | null) => {
+      if (!draft || draft.id === appliedDraftRef.current) return
+      appliedDraftRef.current = draft.id
+      setDescription(draft.description)
+      setPlan(draft.plan)
+      setSelectedStage(draft.plan.stages[0]?.id ?? null)
+      setOriginRunId(draft.runId)
+      setError(null)
+    }
+    adopt(getPipelinePlanDraft())
+    return subscribePipelinePlanDraft(adopt)
+  }, [])
+
   const generatePlan = useCallback(async () => {
     if (!description.trim() || loading) return
     setLoading(true)
     setError(null)
     setPlan(null)
     setSelectedStage(null)
+    setOriginRunId(null)
     try {
-      const result = await api.generatePipelinePlan({ description: description.trim() })
+      const result = await api.generatePipelinePlan({
+        description: description.trim(),
+        ...(datasetName.trim() ? { dataset_name: datasetName.trim() } : {}),
+        ...(targetColumn.trim() ? { target_column: targetColumn.trim() } : {}),
+        ...(taskType ? { task_type: taskType } : {}),
+      })
       setPlan(result)
+      // Persist it: this page unmounts on navigation, so the stored draft is
+      // what brings the plan back when the user returns. A new generation
+      // (a new query) replaces the previous one.
+      const draft = setPipelinePlanDraft({
+        description: description.trim(),
+        plan: result,
+        runId: null,
+      })
+      appliedDraftRef.current = draft.id
       // Auto-select first stage
       if (result.stages.length > 0) {
         setSelectedStage(result.stages[0].id)
@@ -348,7 +207,7 @@ export function PipelinePage() {
     } finally {
       setLoading(false)
     }
-  }, [description, loading])
+  }, [description, datasetName, targetColumn, taskType, loading])
 
   const selectedStageData = useMemo(() => {
     if (!plan || !selectedStage) return null
@@ -359,7 +218,7 @@ export function PipelinePage() {
     <div className="flex h-full min-w-0 flex-col">
       <PageHeader
         title="Pipeline Planner"
-        subtitle="Describe your experiment and AutoSage designs a complete, interactive pipeline with stages, data flow, and agent assignments."
+        subtitle="Describe an experiment and AutoSage designs a pipeline, then lays it out as a navigable flow graph."
         right={
           <div className="flex items-center gap-3">
             {plannerStatus && (
@@ -377,7 +236,7 @@ export function PipelinePage() {
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1200px] px-8 py-6">
+        <div className="w-full px-3 py-6">
           {/* ── Input Section ── */}
           <div className="rounded-xl border border-[var(--as-border)] bg-[var(--as-glass-bg)] p-5 mb-6">
             <div className="flex items-center gap-2 mb-3">
@@ -436,6 +295,10 @@ export function PipelinePage() {
                   onClick={() => {
                     setPlan(null)
                     setSelectedStage(null)
+                    setOriginRunId(null)
+                    // Also forget it durably, so returning to this page does
+                    // not resurrect a plan the user discarded.
+                    clearPipelinePlanDraft()
                   }}
                   className="flex h-[36px] items-center gap-1.5 rounded-lg border border-[var(--as-border)] px-4 text-[13px] text-[var(--as-text-2)] transition hover:bg-[var(--as-glass-bg-2)]"
                 >
@@ -443,9 +306,44 @@ export function PipelinePage() {
                   Clear
                 </button>
               )}
-              <span className="mono text-[11.5px] text-[var(--as-text-3)]">
-                ⌘/Ctrl + Enter
-              </span>
+              <span className="mono text-[11.5px] text-[var(--as-text-3)]">⌘/Ctrl + Enter</span>
+            </div>
+
+            {/* Optional planning context. The backend accepts all three; an
+                unset field is simply omitted from the request. */}
+            <div className="mt-4 grid gap-3 border-t border-[var(--as-border)] pt-4 sm:grid-cols-3">
+              <label className="block">
+                <span className="label-xs mb-1.5 block">Dataset (optional)</span>
+                <input
+                  value={datasetName}
+                  onChange={(e) => setDatasetName(e.target.value)}
+                  placeholder="churn.csv"
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-[var(--as-border)] bg-[var(--as-bg-2)] px-3 py-2 text-[13px] text-[var(--as-text)] outline-none placeholder:text-[var(--as-text-3)] focus:border-[var(--as-accent)]"
+                />
+              </label>
+              <label className="block">
+                <span className="label-xs mb-1.5 block">Target column (optional)</span>
+                <input
+                  value={targetColumn}
+                  onChange={(e) => setTargetColumn(e.target.value)}
+                  placeholder="churn"
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-[var(--as-border)] bg-[var(--as-bg-2)] px-3 py-2 text-[13px] text-[var(--as-text)] outline-none placeholder:text-[var(--as-text-3)] focus:border-[var(--as-accent)]"
+                />
+              </label>
+              <label className="block">
+                <span className="label-xs mb-1.5 block">Task type (optional)</span>
+                <select
+                  value={taskType}
+                  onChange={(e) => setTaskType(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--as-border)] bg-[var(--as-bg-2)] px-3 py-2 text-[13px] text-[var(--as-text)] outline-none focus:border-[var(--as-accent)]"
+                >
+                  <option value="">Detect automatically</option>
+                  <option value="classification">Classification</option>
+                  <option value="regression">Regression</option>
+                </select>
+              </label>
             </div>
           </div>
 
@@ -491,34 +389,41 @@ export function PipelinePage() {
                   <span className="mono text-[11.5px] text-[var(--as-text-3)]">
                     source: {plan.source}
                   </span>
+                  {originRunId && (
+                    <span
+                      className="mono text-[11.5px] text-violet-300/90"
+                      title="Generated alongside the Generate & Verify session"
+                    >
+                      from Generate &amp; Verify run {originRunId.slice(0, 8)}
+                    </span>
+                  )}
                 </div>
 
-                {/* Summary text */}
                 {plan.summary && (
                   <p className="mb-5 text-[14px] text-[var(--as-text-2)] leading-relaxed">
                     {plan.summary}
                   </p>
                 )}
 
-                {/* Pipeline Graph */}
-                <div className="rounded-xl border border-[var(--as-border)] bg-[var(--as-glass-bg)] p-5 mb-5">
-                  <div className="flex items-center gap-2 mb-4">
-                    <GitBranch size={14} className="text-violet-400" />
-                    <span className="text-[13px] font-semibold text-[var(--as-text)]">
-                      Pipeline Flow
-                    </span>
-                    <span className="text-[11.5px] text-[var(--as-text-3)]">
-                      — click a stage to inspect
-                    </span>
-                  </div>
-                  <PipelineGraph
+                {/* Export / hand-off */}
+                <div className="mb-4">
+                  <PlanActions plan={plan} />
+                </div>
+
+                {/* What the plan implies */}
+                <div className="mb-5">
+                  <PlanAnalysisPanel plan={plan} />
+                </div>
+
+                {/* Prepared flow graph, with the stage inspector beneath it */}
+                <div className="mb-5">
+                  <PlannedPipelineGraph
                     plan={plan}
                     selectedStage={selectedStage}
                     onSelectStage={setSelectedStage}
                   />
                 </div>
 
-                {/* Stage Detail */}
                 {selectedStageData && (
                   <div className="mb-5">
                     <StageDetail stage={selectedStageData} />
@@ -541,10 +446,7 @@ export function PipelinePage() {
                             key={i}
                             className="flex items-start gap-2 text-[12.5px] text-[var(--as-text-2)]"
                           >
-                            <CheckCircle2
-                              size={12}
-                              className="text-blue-400 mt-0.5 shrink-0"
-                            />
+                            <CheckCircle2 size={12} className="text-blue-400 mt-0.5 shrink-0" />
                             {a}
                           </li>
                         ))}
@@ -556,9 +458,7 @@ export function PipelinePage() {
                     <div className="rounded-xl border border-[var(--as-border)] bg-[var(--as-glass-bg)] p-4">
                       <div className="flex items-center gap-2 mb-3">
                         <AlertTriangle size={13} className="text-amber-400" />
-                        <span className="text-[12.5px] font-semibold text-[var(--as-text)]">
-                          Risks
-                        </span>
+                        <span className="text-[12.5px] font-semibold text-[var(--as-text)]">Risks</span>
                       </div>
                       <ul className="space-y-1.5">
                         {plan.risks.map((r, i) => (
@@ -566,10 +466,7 @@ export function PipelinePage() {
                             key={i}
                             className="flex items-start gap-2 text-[12.5px] text-[var(--as-text-2)]"
                           >
-                            <AlertTriangle
-                              size={12}
-                              className="text-amber-400 mt-0.5 shrink-0"
-                            />
+                            <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
                             {r}
                           </li>
                         ))}
@@ -588,11 +485,12 @@ export function PipelinePage() {
                 <GitBranch size={24} className="text-[var(--as-text-3)]" />
               </div>
               <p className="text-[16px] font-medium text-[var(--as-text-2)]">
-                No pipeline generated yet
+                No pipeline planned yet
               </p>
               <p className="mt-1 max-w-[48ch] text-[14px] text-[var(--as-text-3)] leading-relaxed">
-                Describe your experiment above and click Generate Pipeline. The planner will design
-                a complete pipeline with stages, data flow, and agent assignments.
+                Describe your experiment above and click Generate Pipeline. The planner will design a
+                pipeline with stages, data flow, and agent assignments, and lay it out as a graph.
+                Plans started from Generate &amp; Verify appear here automatically.
               </p>
             </div>
           )}

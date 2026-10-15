@@ -33,6 +33,7 @@ from app.models.project import Project
 from app.models.run import PipelineRun
 from app.models.user import User
 from app.models.verification import Verification
+from app.models.verification_session import VerificationSession
 from app.models.workspace import Workspace
 
 
@@ -142,7 +143,9 @@ class FakeAsyncSession:
             VerifiedMemory: {},
             MLRun: {},
             Artifact: {},
+            VerificationSession: {},
         }
+        self.expire_all_calls = 0
 
     def _entity_for_table(self, name: str) -> Type:
         for entity in self._store:
@@ -205,6 +208,15 @@ class FakeAsyncSession:
 
     async def refresh(self, obj: Any) -> None:
         _apply_client_defaults(obj)
+
+    def expire_all(self) -> None:
+        """No-op — this fake has no identity map, so nothing to expire.
+
+        Counted because the SSE endpoint must call this every tick: against a
+        real AsyncSession, ``get()`` returns the cached instance otherwise and
+        the stream never sees the background run's commits.
+        """
+        self.expire_all_calls += 1
 
     async def close(self) -> None:
         return None

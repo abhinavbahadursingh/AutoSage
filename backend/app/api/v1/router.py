@@ -1,9 +1,9 @@
-﻿"""API v1 Main Router."""
+"""API v1 Main Router."""
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
     auth, health, projects, datasets, runs, evidence,
     memory, experiments, workspaces, verification, storage, reproducibility,
-    websocket, diagnostics, llm, pipeline, sandbox,
+    websocket, diagnostics, llm, pipeline, sandbox, objective_verification,
 )
 
 api_router = APIRouter()
@@ -19,6 +19,7 @@ api_router.include_router(runs.router, prefix="/projects/{project_id}/runs", tag
 api_router.include_router(evidence.router, prefix="/runs/{run_id}/evidence", tags=["Evidence"])
 api_router.include_router(memory.router, prefix="/memory", tags=["Memory"])
 api_router.include_router(verification.router, tags=["Verification"])
+api_router.include_router(objective_verification.router, tags=["ObjectiveVerification"])
 api_router.include_router(storage.router, prefix="/storage", tags=["Storage"])
 api_router.include_router(reproducibility.router, tags=["Reproducibility"])
 api_router.include_router(websocket.router, tags=["WebSocket"])

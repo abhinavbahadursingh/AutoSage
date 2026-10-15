@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { Play, RotateCcw, AlertCircle, Loader2, Dock, Terminal, LayoutPanelLeft, Maximize2, Copy } from 'lucide-react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { Play, RotateCcw, AlertCircle, Loader2, Dock, Terminal, LayoutPanelLeft, Maximize2, Copy, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
-import { CodeEditor } from './CodeEditor'
+import { MonacoCodeEditor } from './MonacoCodeEditor'
 import { FileTabs } from './FileTabs'
 import { FileExplorer, generateMockFileTree } from './FileExplorer'
 import { Terminal as TerminalComponent } from './Terminal'
@@ -23,6 +23,21 @@ interface ExecutionResult {
   error_message: string | null
   duration_sec: number
   exit_code: number | null
+}
+
+export interface ExternalFile {
+  name: string
+  language: string
+  content: string
+}
+
+interface SandboxIDEProps {
+  /**
+   * When provided, the Sandbox is populated with these session files. They are
+   * view-only until edited: Run executes a Python file the user owns (created
+   * or edited), never the generated output itself.
+   */
+  externalFiles?: ExternalFile[] | null
 }
 
 interface FileTab {
@@ -147,21 +162,92 @@ const INITIAL_TERMINAL_LINES: TerminalLine[] = [
   { id: 4, type: 'system', content: 'Type "help" for available commands', timestamp: new Date() },
 ]
 
-export function SandboxIDE() {
+export function SandboxIDE({ externalFiles = null }: SandboxIDEProps) {
   const [status, setStatus] = useState<SandboxStatus>({ available: false, error: 'not probed' })
   const [isRunning, setIsRunning] = useState(false)
   const [result, setResult] = useState<ExecutionResult | null>(null)
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>(INITIAL_TERMINAL_LINES)
-  const [fileTabs, setFileTabs] = useState<FileTab[]>(DEFAULT_FILES)
   const [activeTabId, setActiveTabId] = useState<string>('main')
   const [explorerVisible, setExplorerVisible] = useState(true)
   const [terminalVisible, setTerminalVisible] = useState(true)
   const [terminalHeight, setTerminalHeight] = useState(300)
   const lineIdCounter = useRef(5)
 
+  // Tabs the user has edited in this session. A generated file is the
+  // session's output until they change it — only then does it become *their*
+  // code, and only their code is ever executed.
+  const [editedTabIds, setEditedTabIds] = useState<Set<string>>(() => new Set())
+
+  // When external files are provided (from Objective Verification), populate the
+  // editor with them. The session's own output stays unexecuted; Run unlocks
+  // only for a Python file the user has created or edited (see isUserOwnedTab).
+  const isGeneratedCodeMode = externalFiles !== null && externalFiles.length > 0
+
+  const [fileTabs, setFileTabs] = useState<FileTab[]>(() => {
+    if (isGeneratedCodeMode) {
+      return externalFiles!.map((f, i) => ({
+        id: `gen-${i}`,
+        name: f.name,
+        path: `/workspace/${f.name}`,
+        language: (f.language as FileTab['language']) || 'plaintext',
+        content: f.content,
+        modified: false,
+        active: i === 0,
+      }))
+    }
+    return DEFAULT_FILES
+  })
+
+  // Live mirror of fileTabs for effects that must read the current value
+  // without re-subscribing on every edit.
+  const fileTabsRef = useRef(fileTabs)
   useEffect(() => {
-    fetchStatus()
-  }, [])
+    fileTabsRef.current = fileTabs
+  }, [fileTabs])
+
+  useEffect(() => {
+    // Point the active tab at the first generated file, but only when the
+    // current tab no longer exists (e.g. the first batch just arrived) — a
+    // later stream update must not steal the tab the reviewer is reading.
+    if (isGeneratedCodeMode && externalFiles && externalFiles.length > 0) {
+      setActiveTabId((prev) =>
+        prev && fileTabsRef.current.some((t) => t.id === prev) ? prev : 'gen-0',
+      )
+    }
+  }, [isGeneratedCodeMode, externalFiles])
+
+  useEffect(() => {
+    // Files can arrive after mount (the session streams them). Merge them in
+    // without discarding edits the reviewer already made to a same-named tab.
+    if (!isGeneratedCodeMode || !externalFiles) return
+    setFileTabs((prev) => {
+      const byName = new Map(prev.map((t) => [t.name, t]))
+      const merged = externalFiles.map((f, i) => {
+        const existing = byName.get(f.name)
+        return {
+          id: existing?.id ?? `gen-${i}`,
+          name: f.name,
+          path: `/workspace/${f.name}`,
+          language: (f.language as FileTab['language']) || 'plaintext',
+          content: existing?.content ?? f.content,
+          modified: existing?.modified ?? false,
+          active: false,
+        }
+      })
+      // Keep any files the reviewer created locally that the session does not
+      // have — their working copy is not silently thrown away.
+      const generatedNames = new Set(externalFiles.map((f) => f.name))
+      const local = prev.filter((t) => !t.name.startsWith('gen-') && !generatedNames.has(t.name))
+      const next = [...merged, ...local]
+      if (
+        next.length === prev.length &&
+        next.every((t, i) => t.id === prev[i].id && t.content === prev[i].content)
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [isGeneratedCodeMode, externalFiles])
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -172,11 +258,18 @@ export function SandboxIDE() {
     }
   }, [])
 
+  useEffect(() => {
+    // The status drives the availability dot and the Run button, so it is
+    // needed in generated-code mode too — a user-edited file is runnable there.
+    fetchStatus()
+  }, [fetchStatus])
+
   const getActiveTab = useCallback(() => {
     return fileTabs.find((tab) => tab.id === activeTabId) || fileTabs[0]
   }, [fileTabs, activeTabId])
 
   const updateTabContent = useCallback((tabId: string, content: string) => {
+    setEditedTabIds((prev) => (prev.has(tabId) ? prev : new Set(prev).add(tabId)))
     setFileTabs((prev) =>
       prev.map((tab) =>
         tab.id === tabId ? { ...tab, content, modified: true } : tab
@@ -185,6 +278,7 @@ export function SandboxIDE() {
   }, [])
 
   const handleTabChange = useCallback((tabId: string) => {
+    setFileTabs((prev) => prev.map((tab) => ({ ...tab, active: tab.id === tabId })))
     setActiveTabId(tabId)
   }, [])
 
@@ -289,18 +383,51 @@ export function SandboxIDE() {
     addTerminalLine({ type: 'output', content: 'Type "help" for available commands', timestamp: new Date() })
   }, [addTerminalLine, clearTerminal])
 
+  const activeTab = getActiveTab()
+
+  // Whether the open file may be executed. Only Python files the user owns
+  // qualify: everything outside generated-code mode, and inside it only the
+  // files they created or edited — the session's own output is never run.
+  const isUserOwnedTab = useCallback(
+    (tab: FileTab | undefined) =>
+      !!tab && (!isGeneratedCodeMode || !tab.id.startsWith('gen-') || editedTabIds.has(tab.id)),
+    [isGeneratedCodeMode, editedTabIds],
+  )
+
+  const canRunActiveTab =
+    !!activeTab && activeTab.language === 'python' && isUserOwnedTab(activeTab)
+
+  // The terminal and its toggle only show up once there is something real to
+  // show: the demo UI always, generated-code mode only after an actual run.
+  // An empty panel beside an untouched generated file would imply an
+  // execution that has not happened — and mounting it mid-edit would yank
+  // focus out of the editor.
+  const terminalUiVisible = !isGeneratedCodeMode || isRunning || result !== null
+
+  // Explains a greyed-out Run button; undefined when running is allowed.
+  const runDisabledReason = !status.available
+    ? status.error || 'The Docker sandbox is unavailable'
+    : !activeTab
+      ? 'No file open'
+      : activeTab.language !== 'python'
+        ? 'Only Python files can run in the sandbox'
+        : !isUserOwnedTab(activeTab)
+          ? 'Generated code is never executed — edit this file to run your own copy'
+          : undefined
+
   const runScript = useCallback(async () => {
-    const activeTab = getActiveTab()
-    if (!activeTab) return
+    const tab = getActiveTab()
+    if (!tab || tab.language !== 'python' || !isUserOwnedTab(tab) || !status.available) return
 
     setIsRunning(true)
     setResult(null)
+    setTerminalVisible(true)
     addTerminalLine({ type: 'system', content: 'Starting sandbox execution...', timestamp: new Date() })
-    addTerminalLine({ type: 'command', content: `python ${activeTab.name}`, timestamp: new Date() })
+    addTerminalLine({ type: 'command', content: `python ${tab.name}`, timestamp: new Date() })
 
     try {
       const data = await api.sandboxExecute({
-        script: activeTab.content,
+        script: tab.content,
         dataset_path: null,
         env_vars: {},
       })
@@ -344,7 +471,7 @@ export function SandboxIDE() {
     } finally {
       setIsRunning(false)
     }
-  }, [getActiveTab, addTerminalLine])
+  }, [getActiveTab, isUserOwnedTab, status.available, addTerminalLine])
 
   const handleExplorerToggle = useCallback(() => {
     setExplorerVisible((prev) => !prev)
@@ -374,7 +501,22 @@ export function SandboxIDE() {
     document.addEventListener('mouseup', handleMouseUp)
   }, [])
 
-  const activeTab = getActiveTab()
+  // In generated-code mode the explorer lists the session's real files rather
+  // than the mock demo tree — the whole point is reviewing what was generated.
+  const explorerNodes = useMemo(
+    () =>
+      isGeneratedCodeMode
+        ? fileTabs.map((t) => ({
+            id: t.id,
+            name: t.name,
+            path: t.path,
+            type: 'file' as const,
+            language: t.language,
+            expanded: false,
+          }))
+        : generateMockFileTree(),
+    [isGeneratedCodeMode, fileTabs],
+  )
 
   return (
     <div className="sandbox-ide-container flex h-full flex-col rounded-2xl border border-ink-600 bg-ink-900/80 overflow-hidden">
@@ -417,6 +559,7 @@ export function SandboxIDE() {
             }`}
             title={terminalVisible ? 'Hide Terminal (Ctrl+J)' : 'Show Terminal (Ctrl+J)'}
             aria-label={terminalVisible ? 'Hide Terminal' : 'Show Terminal'}
+            style={!terminalUiVisible ? { display: 'none' } : undefined}
           >
             <Terminal className="h-4 w-4" />
           </button>
@@ -438,7 +581,7 @@ export function SandboxIDE() {
         {explorerVisible && (
           <div className="w-64 flex flex-col border-r border-ink-600 transition-all duration-200">
             <FileExplorer
-              rootNodes={generateMockFileTree()}
+              rootNodes={explorerNodes}
               onFileSelect={(file) => {
                 if (file.type === 'file') {
                   const existingTab = fileTabs.find((tab) => tab.path === file.path)
@@ -483,7 +626,7 @@ export function SandboxIDE() {
           {/* Editor */}
           <div className="flex-1 flex flex-col min-w-0 relative">
             {activeTab && (
-              <CodeEditor
+              <MonacoCodeEditor
                 value={activeTab.content}
                 onChange={(content) => updateTabContent(activeTab.id, content)}
                 language={activeTab.language}
@@ -494,8 +637,10 @@ export function SandboxIDE() {
           </div>
         </div>
 
-        {/* Terminal Panel */}
-        {terminalVisible && (
+        {/* Terminal Panel — hidden while there is nothing real to show: an
+            untouched generated file is never executed, so a terminal beside
+            it would imply an execution that does not happen. */}
+        {terminalVisible && terminalUiVisible && (
           <div className="flex flex-col min-w-0 border-l border-ink-600 transition-all duration-200" style={{ width: terminalVisible ? '400px' : '0' }}>
             <div
               className="h-1 bg-ink-600 hover:bg-accent-400 cursor-row-resize transition-colors"
@@ -602,45 +747,74 @@ export function SandboxIDE() {
         gitChanges={fileTabs.filter((t) => t.modified).length}
       />
 
-      {/* Run Button Bar */}
-      <div className="flex items-center justify-between gap-3 border-t border-ink-600 bg-ink-800/50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          {result && (
-            <div className="flex items-center gap-2 text-[12px]">
-              <span className="text-paper-400">Duration:</span>
-              <span className="mono text-accent-300">{result.duration_sec.toFixed(2)}s</span>
-              <span className="text-paper-400">Exit:</span>
-              <span className={`mono ${result.exit_code === 0 ? 'text-verify-400' : 'text-conflict-400'}`}>
-                {result.exit_code ?? 'N/A'}
-              </span>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={runScript}
-            disabled={isRunning || !status.available || !activeTab}
-            className="flex h-[36px] items-center gap-2 rounded-xl px-5 text-[13.5px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50"
-            style={{
-              background: 'var(--as-accent)',
-              borderColor: 'var(--as-accent)',
-              color: '#fff',
-            }}
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Running...
-              </>
-            ) : (
-              <>
-                <Play size={14} />
-                Run in Sandbox
-              </>
+      {/* Run Button Bar — always offered; the reason beside it says why the
+          open file cannot run yet (see runDisabledReason). */}
+      {activeTab && (
+        <div className="flex items-center justify-between gap-3 border-t border-ink-600 bg-ink-800/50 px-4 py-3">
+          <div className="flex items-center gap-3">
+            {result && (
+              <div className="flex items-center gap-2 text-[12px]">
+                <span className="text-paper-400">Duration:</span>
+                <span className="mono text-accent-300">{result.duration_sec.toFixed(2)}s</span>
+                <span className="text-paper-400">Exit:</span>
+                <span className={`mono ${result.exit_code === 0 ? 'text-verify-400' : 'text-conflict-400'}`}>
+                  {result.exit_code ?? 'N/A'}
+                </span>
+              </div>
             )}
-          </button>
+          </div>
+          <div className="flex items-center gap-2">
+            {!isRunning && runDisabledReason && (
+              <span id="run-disabled-reason" className="text-[11.5px] text-paper-400">
+                {runDisabledReason}
+              </span>
+            )}
+            <button
+              onClick={runScript}
+              disabled={isRunning || !canRunActiveTab || !status.available}
+              title={runDisabledReason}
+              aria-describedby={runDisabledReason ? 'run-disabled-reason' : undefined}
+              className="flex h-[36px] items-center gap-2 rounded-xl px-5 text-[13.5px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                background: 'var(--as-accent)',
+                borderColor: 'var(--as-accent)',
+                color: '#fff',
+              }}
+            >
+              {isRunning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play size={14} />
+                  Run in Sandbox
+                </>
+              )}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Generated code banner — only the user's own edits are executable */}
+      {isGeneratedCodeMode && (
+        <div
+          className="flex items-center gap-2 border-t px-4 py-2.5 text-[12px]"
+          style={{
+            borderColor: 'var(--as-border)',
+            background: 'color-mix(in oklch, var(--as-teal) 8%, transparent)',
+            color: 'var(--as-teal)',
+          }}
+        >
+          <ShieldCheck size={13} />
+          <span>
+            {canRunActiveTab
+              ? 'Your edited copy — Run executes it in the Docker sandbox; the session’s original file is untouched.'
+              : 'Generated code — view, edit, and copy only. Edit a Python file to run your own version.'}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

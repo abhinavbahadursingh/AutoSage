@@ -16,6 +16,7 @@ import {
   Settings2,
   ShieldCheck,
   Sun,
+  Target,
   Terminal,
   User,
 } from 'lucide-react'
@@ -37,7 +38,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Operate',
     items: [
-      { to: '/workspace', label: 'Workspace', icon: LayoutGrid },
+      { to: '/objectives', label: 'Objectives', icon: Target },
       { to: '/pipeline', label: 'Pipeline', icon: GitBranch },
       { to: '/sandbox', label: 'Sandbox', icon: Terminal },
       { to: '/experiments', label: 'Experiments', icon: FlaskConical },
@@ -48,6 +49,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/agents', label: 'Agents', icon: Boxes },
       { to: '/evidence', label: 'Evidence', icon: ShieldCheck },
+      { to: '/workspace', label: 'Workspace', icon: LayoutGrid },
       { to: '/memory', label: 'Memory', icon: Library },
       { to: '/checkllm', label: 'CheckLLM', icon: PlugZap },
     ],
@@ -503,20 +505,35 @@ export function PageHeader({
   title,
   subtitle,
   right,
+  dense = false,
 }: {
   title: string
   subtitle?: string
   right?: React.ReactNode
+  /** Tighter padding/type for pages whose results need the vertical room. */
+  dense?: boolean
 }) {
   return (
     <header
-      className="flex items-end justify-between gap-6 border-b px-8 py-7"
+      className={`flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b px-8 ${dense ? 'py-4' : 'py-7'}`}
       style={{ borderColor: 'var(--as-border)' }}
     >
-      <div>
-        <h1 className="text-[20px] font-semibold tracking-tight" style={{ color: 'var(--as-text)' }}>{title}</h1>
+      <div className="min-w-0 max-w-full">
+        <h1
+          className={`${dense ? 'text-[18px]' : 'text-[20px]'} font-semibold tracking-tight`}
+          style={{ color: 'var(--as-text)' }}
+        >
+          {title}
+        </h1>
         {subtitle && (
-          <p className="mt-1.5 max-w-[74ch] text-[15px] leading-relaxed" style={{ color: 'var(--as-text-2)' }}>
+          <p
+            className={
+              dense
+                ? 'mt-1 max-w-[110ch] text-[13px] leading-snug'
+                : 'mt-1.5 max-w-[74ch] text-[15px] leading-relaxed'
+            }
+            style={{ color: 'var(--as-text-2)' }}
+          >
             {subtitle}
           </p>
         )}

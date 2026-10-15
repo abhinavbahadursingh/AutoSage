@@ -203,6 +203,210 @@ export interface EvidenceSourceInfo {
   last_updated: string | null
 }
 
+/** Generic JSON object, used for backend payloads with free-form keys. */
+export type Dict<V = unknown> = Record<string, V>
+
+// ── Fresh Experiment Objective Verification ──────────────────────────────────
+//
+// Four canonical objectives and a fixed stage order, both served by the backend
+// so the client never hardcodes them. Mirrors
+// app/schemas/objective_verification.py.
+
+/**
+ * Terminal state of one deterministic check.
+ *
+ * NOT_VERIFIED is deliberately not a pass: it means the evidence a check
+ * needed does not exist. On a fresh session that is the normal case for
+ * everything depending on a training run, because verification never trains.
+ */
+export type ObjectiveCheckStatus = 'PASS' | 'FAIL' | 'NOT_VERIFIED' | 'BLOCKED'
+
+/** Lifecycle of one verification stage. */
+export type ObjectiveStageStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'PASSED'
+  | 'FAILED'
+  | 'NOT_VERIFIED'
+  | 'BLOCKED'
+
+export interface ObjectiveCheckDefinition {
+  id: string
+  title: string
+  description: string
+  /** What must be true for this check to PASS. */
+  expected: string
+  /** What record/artifact backs the verdict when it does. */
+  evidence_source: string
+}
+
+export interface ObjectiveDefinition {
+  id: string
+  number: number
+  title: string
+  statement: string
+  checks: ObjectiveCheckDefinition[]
+}
+
+export interface ObjectiveCheckResult {
+  check_id: string
+  title: string
+  status: ObjectiveCheckStatus
+  /** What the check expected, echoed so both sides are visible. */
+  expected: string
+  /** What actually happened. */
+  actual: string
+  /** What was observed, quoted verbatim. */
+  evidence: string[]
+  reasoning: string
+  /** 0..1, derived deterministically from gathered evidence. */
+  confidence: number
+  artifact: string
+  checked_at: string
+  /**
+   * Evidence kind examined: 'source' (repository), 'probe' (synthetic
+   * in-memory data), 'session' (this session's database records),
+   * 'generated' (code-generation output, never executed) or 'empirical'
+   * (a real measured run).
+   */
+  category?: string
+  /**
+   * Strength of that evidence: 'source' | 'config' | 'generated' | 'runtime'.
+   * A source-level PASS is not proof that a specific generated decision is
+   * correct — runtime checks are exactly the ones a fresh session cannot meet.
+   */
+  verification_level?: string
+}
+
+export interface ObjectiveResult {
+  id: string
+  number: number
+  title: string
+  statement: string
+  status: ObjectiveStageStatus
+  confidence: number
+  checks: ObjectiveCheckResult[]
+  started_at: string | null
+  completed_at: string | null
+}
+
+/**
+ * One design decision produced during code generation. Rationale, confidence
+ * and source are optional on purpose: they are only present when the
+ * generating model genuinely produced them, never filled in with a default.
+ */
+export interface ObjectiveDecisionRecord {
+  category: string
+  decision: string
+  rationale?: string | null
+  confidence?: number | null
+  source?: string | null
+  alternatives?: string[]
+  assumptions?: string[]
+}
+
+/** The design summary the individual decisions belong to. */
+export interface ObjectiveDesignRecord {
+  algorithm?: string | null
+  hyperparameters?: Record<string, unknown>
+  metrics?: Record<string, unknown>
+  validation_strategy?: string | null
+  assumptions?: string[]
+  alternatives?: string[]
+  decisions?: ObjectiveDecisionRecord[]
+}
+
+export interface ObjectiveVerificationReport {
+  run_id: string
+  experiment_id: string
+  problem_statement: string
+  dataset_name: string
+  config: Dict
+  objectives: ObjectiveResult[]
+  overall_status: ObjectiveStageStatus
+  overall_confidence: number
+  /** Check tallies by status, so the verdict is auditable at a glance. */
+  totals: Record<string, number>
+  /** Check tallies by evidence category (source/probe/session/generated/...). */
+  evidence_categories?: Record<string, number>
+  /** Check tallies by verification level (source/config/generated/runtime). */
+  verification_levels?: Record<string, number>
+  code_generation_status?: string
+  code_generation_message?: string
+  /** Design summary + decisions produced with the code (design-time only). */
+  design?: ObjectiveDesignRecord
+  decisions?: ObjectiveDecisionRecord[]
+  started_at: string | null
+  completed_at: string | null
+}
+
+/** One streamed progress frame. */
+export interface ObjectiveStageUpdate {
+  run_id: string
+  stage: string
+  status: ObjectiveStageStatus
+  message: string
+  check: ObjectiveCheckResult | null
+  objective_id: string | null
+  emitted_at: string
+  /** Stage payload — code generation carries files, activity and decisions. */
+  payload?: Dict
+}
+
+/**
+ * Body for POST /objective-verification/sessions. `problem_statement` is
+ * required: there is no previous experiment to fall back to. Dataset, task
+ * type and metric are optional — this is a design-time audit.
+ */
+export interface FreshSessionCreate {
+  workspace_id: string
+  problem_statement: string
+  dataset_name?: string
+  target_column?: string | null
+  task_type?: string
+  primary_metric?: string | null
+}
+
+/** POST /sessions response — the run id arrives immediately. */
+export interface FreshSessionAccepted {
+  run_id: string
+  experiment_id: string
+  status: ObjectiveStageStatus
+  stream_url: string
+}
+
+/** GET /sessions/{run_id} — reconnect path, replays stored frames. */
+export interface ObjectiveSessionState {
+  run_id: string
+  experiment_id: string
+  status: string
+  problem_statement: string
+  dataset_name: string
+  config: Dict
+  updates: ObjectiveStageUpdate[]
+  report: ObjectiveVerificationReport | null
+  /** Code-generation artifacts, readable without re-parsing the frames. */
+  generated_files?: { name: string; language: string; content: string }[]
+  activity_log?: string[]
+  design?: ObjectiveDesignRecord
+  decisions?: ObjectiveDecisionRecord[]
+  code_generation_status?: string | null
+  code_generation_message?: string | null
+  overall_status: string | null
+  overall_confidence: number | null
+  error: string | null
+  running: boolean
+  created_at: string | null
+  completed_at: string | null
+}
+
+/** One dataset the caller may submit for a fresh session. */
+export interface SessionDataset {
+  name: string
+  size_bytes: number | null
+  dataset_id: string | null
+}
+
 export interface ProjectResponse {
   id: string
   user_id: string
@@ -553,6 +757,61 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   return s ? `?${s}` : ''
 }
 
+/**
+ * Console tracer shared with the Objectives page. Both use the `[G&V]`
+ * prefix so the whole Generate & Verify flow reads as one filtered trail in
+ * the browser console.
+ */
+function trace(...args: unknown[]): void {
+  console.log('[G&V]', new Date().toISOString().slice(11, 23), ...args)
+}
+
+function traceError(...args: unknown[]): void {
+  console.error('[G&V]', new Date().toISOString().slice(11, 23), ...args)
+}
+
+/**
+ * Parse one SSE frame and route it to the matching handler.
+ *
+ * Kept separate from `streamObjectiveSession` so the frame grammar lives in one
+ * place: `event:` names the channel and `data:` carries the JSON payload.
+ * Comment-only keep-alive frames are ignored.
+ */
+function dispatchObjectiveFrame(
+  frame: string,
+  handlers: {
+    onStage?: (update: ObjectiveStageUpdate) => void
+    onReport?: (report: ObjectiveVerificationReport) => void
+    onError?: (message: string) => void
+  },
+): void {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (!line || line.startsWith(':')) continue
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (!dataLines.length) return
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(dataLines.join('\n'))
+  } catch {
+    traceError('malformed SSE frame', { event, raw: frame })
+    handlers.onError?.('Received a malformed progress frame')
+    return
+  }
+
+  trace('raw SSE frame', { event }, payload)
+
+  if (event === 'stage') handlers.onStage?.(payload as ObjectiveStageUpdate)
+  else if (event === 'report') handlers.onReport?.(payload as ObjectiveVerificationReport)
+  else if (event === 'error') {
+    handlers.onError?.((payload as { message?: string })?.message ?? 'Verification failed')
+  }
+}
+
 export const api = {
   base: API_BASE,
 
@@ -701,6 +960,120 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ query, limit }),
     }),
+
+  // ── Fresh Experiment Objective Verification ───────────────────────────────
+
+  /**
+   * The fixed four-objective graph definition.
+   * Node identity, ordering and check identity all come from here, never from
+   * a client copy that could drift.
+   */
+  listObjectives: () => request<ObjectiveDefinition[]>('/objective-verification/objectives'),
+
+  /** The fixed stage order: input -> objective_1..4 -> report. */
+  objectiveStages: () => request<{ stages: string[] }>('/objective-verification/stages'),
+
+  /** Datasets the caller may submit for a fresh session. */
+  listSessionDatasets: (workspaceId?: string) =>
+    request<SessionDataset[]>(`/objective-verification/datasets${qs({ workspace_id: workspaceId })}`),
+
+  /**
+   * Start a brand-new verification session. Returns the run id immediately —
+   * this never blocks on the verification itself, and it never reuses a
+   * previous experiment.
+   */
+  createObjectiveSession: (payload: FreshSessionCreate) =>
+    request<FreshSessionAccepted>('/objective-verification/sessions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** Reconnect path: accumulated frames + report for a known run. */
+  getObjectiveSession: (runId: string) =>
+    request<ObjectiveSessionState>(
+      `/objective-verification/sessions/${encodeURIComponent(runId)}`,
+    ),
+
+  /**
+   * Subscribe to a session's progress over SSE.
+   *
+   * Returns an unsubscribe function. Frames are persisted server-side as they
+   * are emitted, so a client that subscribes late (or reconnects) replays
+   * everything it missed rather than restarting the run.
+   *
+   * The raw `fetch` + `ReadableStream` path is used rather than `EventSource`
+   * because the stream needs the same Bearer token as every other call, and
+   * `EventSource` cannot set request headers.
+   */
+  streamObjectiveSession: (
+    runId: string,
+    handlers: {
+      onStage?: (update: ObjectiveStageUpdate) => void
+      onReport?: (report: ObjectiveVerificationReport) => void
+      onError?: (message: string) => void
+      onOpen?: () => void
+    },
+  ): (() => void) => {
+    const controller = new AbortController()
+    let closed = false
+
+    void (async () => {
+      try {
+        const token = await ensureToken()
+        const url = resolveUrl(
+          `/objective-verification/sessions/${encodeURIComponent(runId)}/stream`,
+        )
+        trace('opening SSE connection', { run_id: runId, url })
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          signal: controller.signal,
+        })
+        if (!response.ok || !response.body) {
+          traceError('SSE connection rejected', { run_id: runId, status: response.status })
+          handlers.onError?.(`Stream failed (HTTP ${response.status})`)
+          return
+        }
+        trace('SSE connection established', { run_id: runId, status: response.status })
+        handlers.onOpen?.()
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!closed) {
+          const { done, value } = await reader.read()
+          if (done) {
+            trace('SSE stream ended (reader done)', { run_id: runId })
+            break
+          }
+          buffer += decoder.decode(value, { stream: true })
+
+          // SSE frames are separated by a blank line.
+          let boundary = buffer.indexOf('\n\n')
+          while (boundary !== -1) {
+            const frame = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            dispatchObjectiveFrame(frame, handlers)
+            boundary = buffer.indexOf('\n\n')
+          }
+        }
+        // Flush a trailing frame that arrived without its blank-line terminator.
+        if (buffer.trim()) dispatchObjectiveFrame(buffer, handlers)
+      } catch (err) {
+        if (!closed && !(err instanceof DOMException && err.name === 'AbortError')) {
+          traceError('SSE stream failed', { run_id: runId, error: err })
+          handlers.onError?.(err instanceof Error ? err.message : 'Stream failed')
+        } else if (closed) {
+          trace('SSE stream closed by client', { run_id: runId })
+        }
+      }
+    })()
+
+    return () => {
+      closed = true
+      controller.abort()
+    }
+  },
 
   storageStats: () => request<StorageStats>('/storage/stats'),
 

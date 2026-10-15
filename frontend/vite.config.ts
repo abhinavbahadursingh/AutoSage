@@ -13,6 +13,16 @@ export default defineConfig({
         target: backendOrigin,
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
+            // Disable buffering for SSE streams so events reach the browser
+            // in real-time instead of being buffered until the response ends.
+            if (req.url?.includes('/stream')) {
+              proxyRes.headers['x-accel-buffering'] = 'no'
+              proxyRes.headers['cache-control'] = 'no-cache'
+            }
+          })
+        },
       },
       '/health': {
         target: backendOrigin,

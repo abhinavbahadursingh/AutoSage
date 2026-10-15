@@ -15,6 +15,10 @@ from app.models.ml_run import MLRun  # noqa: F401
 from app.models.artifact import Artifact  # noqa: F401
 from app.models.file_metadata import FileMetadata  # noqa: F401
 from app.models.reproducibility import ReproducibilityRecord  # noqa: F401
+from app.models.verification_session import (  # noqa: F401
+    SessionStatus,
+    VerificationSession,
+)
 
 __all__ = [
     "User",
@@ -37,4 +41,6 @@ __all__ = [
     "Artifact",
     "FileMetadata",
     "ReproducibilityRecord",
+    "VerificationSession",
+    "SessionStatus",
 ]

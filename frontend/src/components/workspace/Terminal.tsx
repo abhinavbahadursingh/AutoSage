@@ -196,7 +196,6 @@ export function Terminal({
             onKeyDown={handleKeyDown}
             className="flex-1 bg-transparent border-none text-paper-100 placeholder-paper-500 text-[12.5px] font-mono focus:outline-none"
             placeholder="Type a command..."
-            autoFocus
             disabled={isRunning}
             aria-label="Terminal command input"
           />

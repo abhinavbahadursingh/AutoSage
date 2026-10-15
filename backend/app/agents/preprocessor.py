@@ -29,40 +29,68 @@ class PreprocessorAgent(BaseAgent):
     def build_prompts(self, state: ExperimentWorkflowState) -> Tuple[str, str]:
         profile = state.get("profile") or {}
         dataset = state.get("dataset_info") or {}
+        schema = state.get("dataset_schema") or {}
+        columns = schema.get("columns") or []
+        # Build a column list with kinds and stats
+        col_lines = []
+        for c in columns:
+            name = c.get("name", "unknown")
+            kind = c.get("kind", "unknown")
+            null_rate = c.get("null_rate", 0.0)
+            n_unique = c.get("n_unique", 0)
+            col_lines.append(f"- {name} (kind={kind}, null_rate={null_rate}, n_unique={n_unique})")
         user = (
             "Design preprocessing for this dataset.\n"
             f"profile={profile}\n"
-            f"dataset={dataset}"
+            f"columns:\n" + "\n".join(col_lines) + "\n"
         )
         return _SYSTEM, user
 
     def heuristic(self, state: ExperimentWorkflowState) -> AgentOutput:
         profile = state.get("profile") or {}
         dataset = state.get("dataset_info") or {}
-        validation = self.call_tool(
-            "validate_dataset",
-            dataset_name=dataset.get("name"),
-            rows=int(dataset.get("rows") or profile.get("n_rows") or 0),
-            columns=list(dataset.get("columns") or []),
-            target_column=dataset.get("target_column") or profile.get("target_column"),
+        schema = state.get("dataset_schema") or {}
+        task_type = profile.get("task_type", "classification")
+        target = profile.get("target_column", "")
+
+        columns = schema.get("columns") or []
+        # Determine column types from the schema
+        numeric_cols = []
+        categorical_cols = []
+        id_cols = []
+        for c in columns:
+            name = c.get("name", "")
+            kind = c.get("kind", "unknown")
+            null_rate = c.get("null_rate", 0.0)
+            if kind == "numeric":
+                numeric_cols.append(name)
+            elif kind in ("categorical", "boolean"):
+                categorical_cols.append(name)
+            elif kind == "unknown" and null_rate > 0.8:
+                id_cols.append(name)  # likely an identifier
+
+        # Default preprocessing based on task type and data characteristics
+        imputation = "median" if numeric_cols else "most_frequent"
+        encoding = "one-hot" if categorical_cols else "none"
+        scaling = "standard" if numeric_cols else "none"
+        outlier_handling = "iqr"
+        feature_engineering = []
+        drop_columns = id_cols  # drop likely identifiers
+
+        rationale = (
+            f"Defaults for {task_type} task "
+            f"with {len(numeric_cols)} numeric and {len(categorical_cols)} categorical features."
         )
-        issues = (validation.data or {}).get("issues") if validation.success else []
-        issues_note = ""
-        if issues:
-            issues_note = f" Validation issues: {', '.join(map(str, issues))}."
+
         return PreprocessingSpecOutput(
             source="heuristic",
-            imputation="median",
-            encoding="one-hot",
-            scaling="standard",
-            outlier_handling="iqr",
-            feature_engineering=[],
-            drop_columns=[],
-            rationale=(
-                f"Defaults for {profile.get('task_type', 'unknown')} task "
-                f"with missing_rate={profile.get('missing_rate', 0.0)}."
-                f"{issues_note}"
-            ),
+            imputation=imputation,
+            encoding=encoding,
+            scaling=scaling,
+            outlier_handling=outlier_handling,
+            feature_engineering=feature_engineering,
+            drop_columns=drop_columns,
+            rationale=rationale,
         )
 
     def state_payload(

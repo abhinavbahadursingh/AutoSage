@@ -31,6 +31,81 @@ def _override_jwt_for_tests():
                 yield
 
 
+class _FakeCodegenLLM:
+    """Deterministic stand-in for the real provider during tests.
+
+    The Objective Verification flow really calls the LLM in production. Tests
+    must not depend on the network, a rate limit or a model's mood, so the
+    generator is fed a canned reply that exercises the same parsing path the
+    real reply goes through (FILE markers, structured decision JSON).
+    """
+
+    #: One pipeline + config + README, in exactly the format the parser wants.
+    FILES_TEXT = (
+        "--- FILE: pipeline.py ---\n"
+        '"""Design-time pipeline; generated, never executed in this session."""\n'
+        "from sklearn.pipeline import Pipeline\n"
+        "MODEL = {'type': 'hist_gradient_boosting', 'max_depth': 8}\n"
+        "--- FILE: config.yaml ---\n"
+        "test_size: 0.2\n"
+        "n_splits: 5\n"
+        "primary_metric: roc_auc\n"
+        "--- FILE: README.md ---\n"
+        "Reviewer note: this session generates but never executes this code.\n"
+    )
+    #: The decision record: algorithm, hp, metrics, validation, assumptions...
+    DESIGN_JSON = (
+        '{"algorithm": "HistGradientBoostingClassifier",'
+        ' "hyperparameters": {"max_depth": 8, "learning_rate": 0.08},'
+        ' "metrics": {"primary": "roc_auc", "secondary": ["f1"]},'
+        ' "validation_strategy": "stratified 5-fold cross-validation",'
+        ' "assumptions": ["target is binary"],'
+        ' "alternatives": ["logistic regression"],'
+        ' "decisions": [{"category": "algorithm",'
+        ' "decision": "HistGradientBoostingClassifier",'
+        ' "rationale": "Handles mixed types without heavy preprocessing.",'
+        ' "confidence": 0.8, "source": "sklearn docs",'
+        ' "alternatives": ["logistic regression"],'
+        ' "assumptions": ["binary target"]}]}'
+    )
+
+    provider = "fake"
+    model = "fake/codegen"
+
+    def has_providers(self) -> bool:
+        return True
+
+    async def complete(self, *, system: str, user: str, **kwargs):  # noqa: ANN001
+        from types import SimpleNamespace
+
+        return SimpleNamespace(text=self.FILES_TEXT, model=self.model, provider=self.provider)
+
+    async def complete_structured(self, *, system: str, user: str, response_model, **kwargs):  # noqa: ANN001
+        import json
+
+        return response_model.model_validate(json.loads(self.DESIGN_JSON))
+
+
+@pytest.fixture()
+def fake_codegen_llm() -> _FakeCodegenLLM:
+    """The canned codegen provider; override in a test to vary its output."""
+    return _FakeCodegenLLM()
+
+
+@pytest.fixture(autouse=True)
+def _stub_codegen_llm(monkeypatch, fake_codegen_llm):
+    """Keep tests hermetic: no test may reach a real LLM provider.
+
+    Production still calls the real provider — only the generator's client
+    lookup is redirected here. A test that wants the *real* failure path can
+    monkeypatch ``app.engine.codegen.generator.get_llm_client`` itself.
+    """
+    monkeypatch.setattr(
+        "app.engine.codegen.generator.get_llm_client",
+        lambda: fake_codegen_llm,
+    )
+
+
 def _write_binary_dataset(path: str, rows: int = 400) -> str:
     """Write a small imbalanced binary-classification CSV; return its path."""
     import numpy as np

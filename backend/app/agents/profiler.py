@@ -102,6 +102,11 @@ class ProfilerAgent(BaseAgent):
 
         Returns None when no schema is available (the caller then reports the
         profile without a target rather than inventing one).
+
+        If the config supplies a ``target_column`` that does not exist in the
+        actual dataset schema, the hint is cleared so the resolver falls back
+        to the objective/prompt and the real columns — rather than failing with
+        a false "column not found" error from a stale config value.
         """
         schema = _schema_from_state(state)
         if schema is None or not schema.columns:
@@ -112,8 +117,25 @@ class ProfilerAgent(BaseAgent):
         hint = config.get("target_column")
         task_type = str(config.get("task_type") or (state.get("dataset_info") or {}).get("task_hint") or "")
 
-        # An LLM-proposed column is evidence, not truth: validation below
-        # rejects any name the file does not actually contain.
+        # --- Validate hint against actual schema --------------------------------
+        # Normalize column names the same way resolve_target does, so "Churn"
+        # in the file matches "churn" in the hint.
+        from app.engine.targeting import normalize_name
+        schema_names = {normalize_name(c.name) for c in schema.columns}
+        hint_normalized = normalize_name(hint) if hint else None
+
+        # If the hint is present but not found in the schema, clear it.
+        # This prevents a stale target_column from a previous experiment
+        # (e.g. "churn" from a former dataset) from causing a false "not found"
+        # error when a new dataset with different columns is used.
+        if hint and hint_normalized not in schema_names:
+            # Remove the stale target_column from config so the resolver
+            # uses the objective + real columns instead.
+            config.pop("target_column", None)
+            # Also clear it from the state payload so it doesn't persist
+            # back to the experiment record.
+            state["config"] = config
+
         proposal = None
         try:
             proposed = self.run_model_only(state)

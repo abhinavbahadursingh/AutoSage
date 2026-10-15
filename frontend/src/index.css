@@ -851,7 +851,13 @@ html.light {
 @media (prefers-reduced-motion: reduce) {
   .animate-slide-up,
   .results-panel,
-  .terminal-welcome {
+  .terminal-welcome,
+  .anim-bar,
+  .anim-fade-up,
+  .anim-rise,
+  .anim-slide-up,
+  .anim-log-in,
+  .anim-indeterminate {
     animation: none !important;
   }
 }
