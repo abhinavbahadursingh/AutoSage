@@ -101,6 +101,8 @@ autoSage/
 | **17** | **Pipeline Planner wired into Generate & Verify** | ✅ A completed verification also publishes a pipeline plan (`POST /pipeline/plan`) so Pipeline / Sandbox / Evidence open with content |
 | **18** | **Sandbox is Runnable from the IDE** | ✅ **Run** executes user-owned Python tabs through `POST /sandbox/execute`; status probe runs in generated mode; generated output is never auto-executed |
 | **19** | **Objectives page fits the viewport** | ✅ Compact page header + one-line query bar when a session exists; Verification Sequence sized to its content (no scrolling); Backend Log takes the remaining column height; no phantom page scroll |
+| **20** | **Objectives page: one objectives list + full-width log** | ✅ The report's per-objective verdicts merged into the Verification Sequence (each row stacks the confidence % over the status pill) and "Open full evidence" moved into the sequence header; the duplicate list is gone; the top row is `fit-content`-sized to the sequence (summary panel out of flow on lg) so the full-width Backend Log starts exactly where the sequence ends — every leftover pixel above its ~190px floor goes to the log; layout probe `frontend/layout-check.mjs` asserts the invariants at 1920×1080 / 1600×950 / 1366×768 with no phantom page scroll |
+| **21** | **Selected objective: length-matched detail panel** | ✅ Selecting an objective fills the summary panel's top section with per-check rows — status icon + pill, confidence, evidence kind, expected/actual (and, before a report, each check's expected outcome and evidence source with a pending/decided marker) — and stretches that section to exactly the Verification Sequence's height on lg, so both panels end on the same line; the check list scrolls inside the section when there are more rows than room; the probe asserts the length/bottom match after selecting an objective |
 
 ---
 
@@ -391,14 +393,14 @@ src/
 ```
 
 **Headless verification recipe (used during development):**
-start a dev server, seed `sessionStorage.as_objective_run` with a known run id via `addInitScript`, drive the page with `playwright-core` + `channel: 'chrome'`, and assert layout invariants (`main.scrollHeight <= main.clientHeight`, sequence `scrollHeight === clientHeight`, right column fully visible).
+start a dev server, seed `sessionStorage.as_objective_run` with a known run id via `addInitScript`, drive the page with `playwright-core` + `channel: 'chrome'`, and assert layout invariants (`main.scrollHeight <= main.clientHeight`, sequence `scrollHeight === clientHeight`, right column fully visible). Ready-made: `frontend/layout-check.mjs` (`BASE=… node layout-check.mjs`) checks the Objectives grid at 1920×1080 / 1600×950 / 1366×768 — no dead space above the log, the log's ~190px floor, no phantom page scroll.
 
 ---
 
 ## Testing & CI
 
 - **Backend:** `pytest tests/ -v` — `tests/unit` (12 suites), `tests/integration` (7 suites, needs Docker/Redis), `tests/e2e` scaffolded. Configured in `pyproject.toml` (`[tool.pytest.ini_options]`), plus `mypy app/` and `ruff check app/`.
-- **Frontend:** `npx tsc -b` (type gate), `npm run lint` (oxlint), `npm run build` (tsc + vite).
+- **Frontend:** `npx tsc -b` (type gate), `npm run lint` (oxlint), `npm run build` (tsc + vite); `node layout-check.mjs` is the headless layout probe (needs the dev server and a completed run id).
 - **CI:** `.github/workflows/ci.yml` runs `backend-test` and `frontend-check` on push and pull request.
 
 ---

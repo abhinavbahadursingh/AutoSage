@@ -1012,10 +1012,15 @@ export const api = {
       onReport?: (report: ObjectiveVerificationReport) => void
       onError?: (message: string) => void
       onOpen?: () => void
+      /** Called when the stream ends normally (server closed the connection)
+        without an error. The page can use this to reconnect or fall back to
+        polling the session state API. */
+      onEnd?: () => void
     },
   ): (() => void) => {
     const controller = new AbortController()
     let closed = false
+    let ended = false
 
     void (async () => {
       try {
@@ -1044,6 +1049,7 @@ export const api = {
           const { done, value } = await reader.read()
           if (done) {
             trace('SSE stream ended (reader done)', { run_id: runId })
+            ended = true
             break
           }
           buffer += decoder.decode(value, { stream: true })
@@ -1059,6 +1065,13 @@ export const api = {
         }
         // Flush a trailing frame that arrived without its blank-line terminator.
         if (buffer.trim()) dispatchObjectiveFrame(buffer, handlers)
+
+        // Stream ended normally (server closed it). Notify the page so it can
+        // reconnect or fall back to polling — but only if we didn't just
+        // receive a report or error (those already set terminal state).
+        if (ended && !closed) {
+          handlers.onEnd?.()
+        }
       } catch (err) {
         if (!closed && !(err instanceof DOMException && err.name === 'AbortError')) {
           traceError('SSE stream failed', { run_id: runId, error: err })

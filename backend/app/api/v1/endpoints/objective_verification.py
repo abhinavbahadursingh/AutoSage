@@ -229,7 +229,7 @@ async def get_session(run_id: uuid.UUID, user: CurrentUser, session: DbSession) 
     "/sessions/{run_id}/stream",
     summary="Server-sent events stream of one session's progress",
 )
-async def stream_session(run_id: uuid.UUID, user: CurrentUser, session: DbSession) -> StreamingResponse:
+async def stream_session(run_id: uuid.UUID, user: CurrentUser) -> StreamingResponse:
     """Stream stage transitions and per-check results as they complete.
 
     SSE is used because the traffic is one-directional (server -> client) and
@@ -239,57 +239,57 @@ async def stream_session(run_id: uuid.UUID, user: CurrentUser, session: DbSessio
     so a client that subscribes late or reconnects still receives every frame
     it missed (they are replayed from the start of the stored history) and the
     stream works regardless of which worker is serving it.
+
+    Each poll opens a *fresh* database session: the verification run commits
+    its frames from a background task's own session, and reusing the request's
+    session across polls can leave SQLAlchemy's identity map holding a stale
+    copy of the row, so the client would never see newly committed frames.
     """
-    service = svc.FreshVerificationService(session)
-    try:
-        await service.get_owned_session(run_id, user.id)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Verification session not found",
-        ) from exc
+    # Ownership check on the request session before opening the stream.
+    session_factory = _session_factory()
+    async with session_factory() as check_session:
+        service = svc.FreshVerificationService(check_session)
+        try:
+            await service.get_owned_session(run_id, user.id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Verification session not found",
+            ) from exc
 
     async def event_source():
         sent = 0
         while True:
-            # Re-read the row each tick so newly committed frames appear.
-            #
-            # The identity map must be dropped first: the run commits from a
-            # different session (a FastAPI background task), and without this
-            # SQLAlchemy would keep handing back the row as it looked when the
-            # stream first touched it — the client would then wait forever on
-            # a run that had already finished.
-            expire_all = getattr(session, "expire_all", None)
-            if expire_all is not None:
-                expire_all()
-            row = await service.get_owned_session(run_id, user.id)
-            frames = list(row.events or [])
-            for frame in frames[sent:]:
-                yield f"event: stage\ndata: {json.dumps(frame)}\n\n"
-            sent = len(frames)
+            # Fresh session per poll so we always read the latest committed
+            # row from the background task's session.
+            async with session_factory() as poll_session:
+                poll_service = svc.FreshVerificationService(poll_session)
+                row = await poll_service.get_owned_session(run_id, user.id)
+                frames = list(row.events or [])
+                for frame in frames[sent:]:
+                    yield f"event: stage\ndata: {json.dumps(frame)}\n\n"
+                sent = len(frames)
 
-            if row.status == svc.SessionStatus.FAILED.value:
-                yield (
-                    "event: error\ndata: "
-                    + json.dumps({"message": row.error or "Verification failed"})
-                    + "\n\n"
-                )
-                return
+                if row.status == svc.SessionStatus.FAILED.value:
+                    yield (
+                        "event: error\ndata: "
+                        + json.dumps({"message": row.error or "Verification failed"})
+                        + "\n\n"
+                    )
+                    return
 
-            if row.status == svc.SessionStatus.COMPLETED.value and row.report:
-                yield (
-                    "event: report\ndata: "
-                    + json.dumps(row.report)
-                    + "\n\n"
-                )
-                return
+                if row.status == svc.SessionStatus.COMPLETED.value and row.report:
+                    yield (
+                        "event: report\ndata: "
+                        + json.dumps(row.report)
+                        + "\n\n"
+                    )
+                    return
 
-            if len(frames) == sent:
-                # Nothing new this tick — including the long LLM round trip,
-                # where the run can legitimately produce no frame for tens of
-                # seconds. A comment frame keeps proxies from dropping what
-                # they would otherwise treat as an idle connection.
-                yield ": waiting\n\n"
+                if len(frames) == sent:
+                    # Keep-alive comment frame so proxies don't drop an idle
+                    # connection during a long LLM round trip.
+                    yield ": waiting\n\n"
             await asyncio.sleep(STREAM_INTERVAL_SECONDS)
 
     return StreamingResponse(

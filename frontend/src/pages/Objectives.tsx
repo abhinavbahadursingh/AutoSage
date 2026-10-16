@@ -26,7 +26,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
-  CheckCircle2,
   CircleSlash,
   Code2,
   ExternalLink,
@@ -45,6 +44,7 @@ import {
   type FreshSessionCreate,
   type ObjectiveCheckStatus,
   type ObjectiveDefinition,
+  type ObjectiveResult,
   type ObjectiveStageUpdate,
   type ObjectiveVerificationReport,
 } from '../lib/api'
@@ -60,6 +60,7 @@ import {
   CATEGORY_META,
   CHECK_META,
   STAGE_META,
+  CategoryTag,
   CheckPill,
   stamp,
   type StageState,
@@ -224,12 +225,19 @@ function WorkflowTimeline({
   objectives,
   stageStates,
   checkStatuses,
+  outcomes,
   activeObjective,
   onSelect,
 }: {
   objectives: ObjectiveDefinition[]
   stageStates: Record<string, StageState>
   checkStatuses: Record<string, ObjectiveCheckStatus>
+  /**
+   * Final per-objective results once the report exists. The row then shows
+   * the verdict (confidence + status) instead of the live check count — the
+   * sequence is the single objectives list, so it carries the report.
+   */
+  outcomes: ObjectiveResult[] | null
   activeObjective: string | null
   onSelect: (id: string) => void
 }) {
@@ -237,28 +245,20 @@ function WorkflowTimeline({
     <div className="space-y-1 px-3 py-3">
       {objectives.map((objective, index) => {
         const stage = `objective_${objective.number}`
-        const state = stageStates[stage] ?? 'PENDING'
-        const results = objective.checks.map((c) => checkStatuses[c.id])
-        const decided = results.filter(Boolean) as ObjectiveCheckStatus[]
+        // The report's verdict wins once it exists; the live stage/check map
+        // is only authoritative while the session is still running.
+        const outcome = outcomes?.find((o) => o.id === objective.id) ?? null
+        const state: StageState = outcome ? outcome.status : stageStates[stage] ?? 'PENDING'
+        const decided = objective.checks
+          .map((c) => checkStatuses[c.id])
+          .filter(Boolean) as ObjectiveCheckStatus[]
         const failed = decided.includes('FAIL')
         const allPass =
           decided.length === objective.checks.length && decided.every((s) => s === 'PASS')
 
-        const color =
-          state === 'PASSED' || allPass
-            ? 'var(--as-verify)'
-            : state === 'FAILED' || failed
-              ? 'var(--as-error)'
-              : state === 'RUNNING'
-                ? 'var(--as-accent)'
-                : state === 'BLOCKED'
-                  ? 'var(--as-text-3)'
-                  : state === 'NOT_VERIFIED'
-                    ? 'var(--as-warn)'
-                    : 'var(--as-text-3)'
-
-        const resolved: StageState =
-          state === 'PASSED' || allPass
+        const resolved: StageState = outcome
+          ? outcome.status
+          : state === 'PASSED' || allPass
             ? 'PASSED'
             : state === 'FAILED' || failed
               ? 'FAILED'
@@ -270,7 +270,7 @@ function WorkflowTimeline({
                     ? 'NOT_VERIFIED'
                     : 'PENDING'
 
-        const { Icon: StatusIcon } = STAGE_META[resolved] ?? STAGE_META.PENDING
+        const { Icon: StatusIcon, color } = STAGE_META[resolved] ?? STAGE_META.PENDING
 
         return (
           <div key={objective.id} className="relative">
@@ -308,14 +308,31 @@ function WorkflowTimeline({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span
-                    className="text-[13px] font-semibold"
+                    className="min-w-0 flex-1 text-[13px] font-semibold"
                     style={{ color: 'var(--as-text)' }}
                   >
                     {objective.number}. {objective.title}
                   </span>
-                  <span className="mono ml-auto shrink-0 text-[10.5px]" style={{ color }}>
-                    {decided.length}/{objective.checks.length}
-                  </span>
+                  {outcome ? (
+                    <span className="flex shrink-0 flex-col items-end gap-[3px]">
+                      <span className="mono text-[10.5px] leading-none" style={{ color }}>
+                        {(outcome.confidence * 100).toFixed(0)}%
+                      </span>
+                      <span
+                        className="inline-flex items-center rounded-full border px-1.5 py-[1px] text-[9.5px] font-semibold uppercase tracking-wider"
+                        style={{
+                          color,
+                          borderColor: `color-mix(in oklch, ${color} 34%, transparent)`,
+                        }}
+                      >
+                        {STAGE_META[resolved].label}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="mono ml-auto shrink-0 text-[10.5px]" style={{ color }}>
+                      {decided.length}/{objective.checks.length}
+                    </span>
+                  )}
                 </div>
                 <p
                   className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug"
@@ -460,6 +477,9 @@ export function ObjectivesPage() {
 
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const logSeq = useRef(0)
+  //: Reconnect attempts for the SSE stream. Reset on each new session; capped
+  //: so a permanently-broken stream doesn't retry forever.
+  const reconnectRef = useRef({ count: 0, max: 4 })
 
   const pushLog = useCallback((stage: string, message: string, tone: LogLine['tone'] = 'info') => {
     setLogs((prev) => [
@@ -591,6 +611,51 @@ export function ObjectivesPage() {
           setBusy(false)
           setConnected(false)
         },
+        onEnd: () => {
+          // Server closed the stream without delivering a report or error.
+          // Attempt to reconnect a few times before falling back to polling.
+          if (reconnectRef.current.count >= reconnectRef.current.max) {
+            traceError('stream reconnect exhausted', { run_id: id })
+            // Fall back to polling the session state API so the user still
+            // gets a verdict even when SSE is unavailable.
+            void (async () => {
+              try {
+                const state = await api.getObjectiveSession(id)
+                if (state.report) {
+                  setReport(state.report)
+                  setBusy(false)
+                  setConnected(false)
+                  setStageStates((prev) => ({ ...prev, report: 'PASSED' }))
+                  pushLog('report', `Verification complete — overall ${state.report.overall_status}`, 'ok')
+                } else if (state.status === 'FAILED') {
+                  setError(state.error || 'Verification failed')
+                  setBusy(false)
+                  setConnected(false)
+                } else {
+                  setError('Verification stream ended before a verdict arrived')
+                  setBusy(false)
+                  setConnected(false)
+                }
+              } catch (err) {
+                setError('Verification stream ended and session state could not be read')
+                setBusy(false)
+                setConnected(false)
+              }
+            })()
+            return
+          }
+          reconnectRef.current.count += 1
+          trace('stream ended, reconnecting', {
+            run_id: id,
+            attempt: reconnectRef.current.count,
+          })
+          pushLog(
+            'client',
+            `Stream ended — reconnecting (attempt ${reconnectRef.current.count}/${reconnectRef.current.max})`,
+            'warn',
+          )
+          setTimeout(() => subscribe(id), 1000)
+        },
       })
     },
     [applyFrame, pushLog],
@@ -636,6 +701,8 @@ export function ObjectivesPage() {
           setStageStates(Object.fromEntries(stages.map((s) => [s, 'PENDING' as StageState])))
           setBusy(true)
           pushLog('client', `Reattached to session ${prior.slice(0, 8)}`, 'ok')
+          // Fresh attachment: reset the reconnect budget for this session.
+          reconnectRef.current = { count: 0, max: 4 }
           subscribe(prior)
           return
         }
@@ -720,6 +787,9 @@ export function ObjectivesPage() {
 
       setRunId(accepted.run_id)
       rememberObjectiveRun(accepted.run_id)
+      // Fresh session: reset the reconnect budget so a new run always gets
+      // up to `max` reconnection attempts before falling back to polling.
+      reconnectRef.current = { count: 0, max: 4 }
       setStageStates(Object.fromEntries(stages.map((s) => [s, 'PENDING' as StageState])))
       pushLog('client', `Session ${accepted.run_id.slice(0, 8)} created — subscribing`, 'ok')
 
@@ -906,22 +976,44 @@ export function ObjectivesPage() {
       )}
 
       {/* ── body ───────────────────────────────────────────────────────── */}
+      {/* Two columns on top (sequence | summary) and a full-width Backend Log
+          row underneath. The sequence is the single objectives list — it owns
+          the final verdicts and the evidence entry point — so the log reads
+          across the whole page instead of a 360px strip.
+          The top row is sized by the sequence's own content: the summary
+          panel is taken out of flow on lg (below), so the log starts exactly
+          where the sequence ends and takes every leftover pixel — no dead
+          space above it. fit-content caps that row so the log keeps at least
+          ~190px, scrolling the sequence internally on short viewports. */}
       <div
-        className="grid min-h-0 flex-1 gap-px lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
+        className="grid min-h-0 flex-1 gap-px lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-rows-[fit-content(calc(100%_-_190px))_minmax(0,1fr)]"
         style={{ background: 'var(--as-border)' }}
       >
-        {/* left: workflow + log */}
+        {/* top-left: verification sequence (carries the report verdicts) */}
         <div className="flex min-h-0 flex-col" style={{ background: 'var(--as-bg-2)' }}>
-          <SectionTitle>Verification Sequence</SectionTitle>
-          {/* Content-sized: every item shows with nothing to scroll. The cap
-              only engages on short viewports, and as a scroll container it
-              shrinks before it could ever spill past the column (spilling is
-              what scrolled the app shell and left a dead strip below). The
-              log below takes every leftover pixel. */}
-          <div
-            className="max-h-[78%] overflow-y-auto border-b"
-            style={{ borderColor: 'var(--as-border)' }}
+          <SectionTitle
+            right={
+              report ? (
+                <Link
+                  to={`/evidence?run=${encodeURIComponent(report.run_id)}`}
+                  className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-all hover:shadow-[0_0_12px_var(--as-teal)]"
+                  style={{
+                    background: 'color-mix(in oklch, var(--as-teal) 12%, transparent)',
+                    color: 'var(--as-teal)',
+                  }}
+                  title="Inspect the recorded design decisions, evidence and per-check results"
+                >
+                  <ExternalLink size={11} /> Open full evidence
+                </Link>
+              ) : null
+            }
           >
+            Verification Sequence
+          </SectionTitle>
+          {/* The grid row bounds this cell, so the sequence scrolls only when
+              it genuinely exceeds the space — it still shrinks before it could
+              spill past the app shell and leave a dead strip below. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {graphLoading ? (
               <div className="space-y-2 px-3 py-3">
                 {[0, 1, 2, 3].map((i) => (
@@ -937,33 +1029,24 @@ export function ObjectivesPage() {
                 objectives={definitions}
                 stageStates={stageStates}
                 checkStatuses={checkStatuses}
+                outcomes={report?.objectives ?? null}
                 activeObjective={activeObjective}
                 onSelect={setActiveObjective}
               />
             )}
           </div>
-
-          <SectionTitle
-            right={
-              logs.length > 0 ? (
-                <span className="mono text-[11px]" style={{ color: 'var(--as-text-3)' }}>
-                  {logs.length} frames
-                </span>
-              ) : null
-            }
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Terminal size={11} /> Backend Log
-            </span>
-          </SectionTitle>
-          <LogConsole lines={logs} connected={busy} />
         </div>
 
-        {/* right: progress summary + final verdict */}
-        <div
-          className="flex min-h-0 flex-col overflow-y-auto"
-          style={{ background: 'var(--as-bg)' }}
-        >
+        {/* right: progress summary + final verdict, held in a relative shim.
+            On lg the panel is taken out of flow, so its length never dictates
+            the top row's height — the sequence does — and the grid gives
+            every leftover pixel to the log below. The panel still fills the
+            row (inset-0) and scrolls its own overflow. */}
+        <div className="relative min-h-0" style={{ background: 'var(--as-bg)' }}>
+          <div
+            className="flex min-h-0 flex-col overflow-y-auto lg:absolute lg:inset-0"
+            style={{ background: 'var(--as-bg)' }}
+          >
           {!report && !busy && !runId && (
             <EmptyState
               icon={<ShieldCheck size={19} />}
@@ -989,9 +1072,16 @@ export function ObjectivesPage() {
             />
           )}
 
-          {/* active objective: compact live summary (details live in Evidence) */}
+          {/* active objective: the selected objective's verdict with its checks
+              in detail — status, confidence, evidence kind, expected/actual.
+              On lg the section stretches to exactly the height of the
+              Verification Sequence panel, so both panels end on the same
+              line; the check list scrolls inside it if it needs more room. */}
           {activeDefinition && (
-            <section className="border-b" style={{ borderColor: 'var(--as-border)' }}>
+            <section
+              className="flex flex-col border-b lg:h-full lg:min-h-0 lg:shrink-0"
+              style={{ borderColor: 'var(--as-border)' }}
+            >
               <SectionTitle
                 right={
                   activeResult ? (
@@ -1028,21 +1118,147 @@ export function ObjectivesPage() {
                   Objective {activeDefinition.number} — {activeDefinition.title}
                 </span>
               </SectionTitle>
-              <p className="px-4 pt-2 text-[12px] leading-relaxed" style={{ color: 'var(--as-text-3)' }}>
+              <p
+                className="line-clamp-2 px-4 pb-1 pt-2 text-[12px] leading-relaxed"
+                style={{ color: 'var(--as-text-3)' }}
+                title={activeDefinition.statement}
+              >
                 {activeDefinition.statement}
               </p>
-              {activeResult ? (
-                <div className="flex flex-wrap gap-1.5 px-4 py-3">
-                  {activeResult.checks.map((check) => (
-                    <CheckPill key={check.check_id} status={check.status} small />
-                  ))}
-                </div>
-              ) : (
-                <div className="px-4 py-3 text-[12px]" style={{ color: 'var(--as-text-3)' }}>
-                  Running {activeDefinition.checks.length} deterministic checks against this
-                  session...
-                </div>
-              )}
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 py-3">
+                {activeResult
+                  ? activeResult.checks.map((check) => {
+                      const meta = CHECK_META[check.status]
+                      return (
+                        <div
+                          key={check.check_id}
+                          className="rounded-lg border px-3 py-2"
+                          style={{
+                            borderColor: 'var(--as-border)',
+                            background: 'var(--as-bg-2)',
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <meta.Icon
+                              size={12}
+                              className="shrink-0"
+                              style={{ color: meta.color }}
+                            />
+                            <span
+                              className="min-w-0 flex-1 truncate text-[12px] font-medium"
+                              style={{ color: 'var(--as-text)' }}
+                              title={check.title}
+                            >
+                              {check.title}
+                            </span>
+                            <CategoryTag category={check.category} />
+                            <span
+                              className="mono shrink-0 text-[10.5px]"
+                              style={{ color: 'var(--as-text-3)' }}
+                              title="check confidence"
+                            >
+                              {(check.confidence * 100).toFixed(0)}%
+                            </span>
+                            <CheckPill status={check.status} small />
+                          </div>
+                          {(check.expected || check.actual) && (
+                            <div className="mt-1.5 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                              {check.expected && (
+                                <p
+                                  className="line-clamp-2 min-w-0 text-[11.5px] leading-snug"
+                                  style={{ color: 'var(--as-text-2)' }}
+                                  title={check.expected}
+                                >
+                                  <span className="label-xs mr-1" style={{ color: 'var(--as-text-3)' }}>
+                                    Expected
+                                  </span>
+                                  {check.expected}
+                                </p>
+                              )}
+                              {check.actual && (
+                                <p
+                                  className="line-clamp-2 min-w-0 text-[11.5px] leading-snug"
+                                  style={{ color: meta.color }}
+                                  title={check.actual}
+                                >
+                                  <span className="label-xs mr-1" style={{ color: 'var(--as-text-3)' }}>
+                                    Actual
+                                  </span>
+                                  {check.actual}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })
+                  : activeDefinition.checks.map((check) => {
+                      const status = checkStatuses[check.id]
+                      const meta = status ? CHECK_META[status] : null
+                      return (
+                        <div
+                          key={check.id}
+                          className="rounded-lg border px-3 py-2"
+                          style={{
+                            borderColor: 'var(--as-border)',
+                            background: 'var(--as-bg-2)',
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            {meta ? (
+                              <meta.Icon
+                                size={12}
+                                className="shrink-0"
+                                style={{ color: meta.color }}
+                              />
+                            ) : (
+                              <span
+                                className="h-[9px] w-[9px] shrink-0 rounded-full"
+                                style={{ border: '1px solid var(--as-text-3)', opacity: 0.5 }}
+                              />
+                            )}
+                            <span
+                              className="min-w-0 flex-1 truncate text-[12px] font-medium"
+                              style={{ color: 'var(--as-text)' }}
+                              title={check.title}
+                            >
+                              {check.title}
+                            </span>
+                            {status ? (
+                              <CheckPill status={status} small />
+                            ) : (
+                              <span
+                                className="mono text-[9.5px] uppercase tracking-wider"
+                                style={{ color: 'var(--as-text-3)' }}
+                              >
+                                pending
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1.5 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                            <p
+                              className="line-clamp-2 min-w-0 text-[11.5px] leading-snug"
+                              style={{ color: 'var(--as-text-2)' }}
+                              title={check.expected}
+                            >
+                              <span className="label-xs mr-1" style={{ color: 'var(--as-text-3)' }}>
+                                Expected
+                              </span>
+                              {check.expected}
+                            </p>
+                            <p
+                              className="mono line-clamp-2 min-w-0 text-[11.5px] leading-snug"
+                              style={{ color: 'var(--as-text-3)' }}
+                              title={check.evidence_source}
+                            >
+                              <span className="label-xs mr-1">Evidence</span>
+                              {check.evidence_source}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })}
+              </div>
             </section>
           )}
 
@@ -1214,65 +1430,34 @@ export function ObjectivesPage() {
                 </div>
               )}
 
-              {/* per-objective one-liners with a pointer to the full evidence */}
-              <div className="px-5 py-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="label-xs" style={{ color: 'var(--as-text-3)' }}>
-                    Objectives
-                  </span>
-                  <Link
-                    to={`/evidence?run=${encodeURIComponent(report.run_id)}`}
-                    className="flex h-[24px] items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium transition-all hover:shadow-[0_0_12px_var(--as-teal)]"
-                    style={{
-                      background: 'color-mix(in oklch, var(--as-teal) 12%, transparent)',
-                      color: 'var(--as-teal)',
-                    }}
-                  >
-                    <ExternalLink size={11} /> Open full evidence
-                  </Link>
-                </div>
-                <ul className="space-y-1.5">
-                  {report.objectives.map((objective) => {
-                    const meta = STAGE_META[objective.status] ?? STAGE_META.PENDING
-                    return (
-                      <li
-                        key={objective.id}
-                        className="flex items-center gap-3 rounded-md border px-3 py-2"
-                        style={{ borderColor: 'var(--as-border)', background: 'var(--as-bg-2)' }}
-                      >
-                        <span
-                          className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
-                          style={{ borderColor: `color-mix(in oklch, ${meta.color} 45%, transparent)`, color: meta.color }}
-                        >
-                          {objective.number}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ color: 'var(--as-text)' }}>
-                          {objective.title}
-                        </span>
-                        <span className="mono shrink-0 text-[11px]" style={{ color: 'var(--as-text-3)' }}>
-                          {(objective.confidence * 100).toFixed(0)}%
-                        </span>
-                        <span
-                          className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-[1px] text-[9.5px] font-semibold uppercase tracking-wider"
-                          style={{
-                            color: meta.color,
-                            borderColor: `color-mix(in oklch, ${meta.color} 34%, transparent)`,
-                          }}
-                        >
-                          {meta.label}
-                        </span>
-                        <span className="shrink-0">{objective.checks.every((c) => c.status === 'PASS') ? (
-                          <CheckCircle2 size={13} style={{ color: 'var(--as-verify)' }} />
-                        ) : (
-                          <AlertTriangle size={13} style={{ color: meta.color }} />
-                        )}</span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
+              {/* The per-objective verdicts live in the Verification Sequence
+                  now — no duplicate list here. Every sequence row carries the
+                  number, confidence and status, and the sequence header owns
+                  the "Open full evidence" action. */}
             </>
           )}
+          </div>
+        </div>
+
+        {/* bottom: backend log — spans the full page width under both columns */}
+        <div
+          className="flex max-h-[240px] min-h-0 flex-col lg:col-span-2 lg:max-h-none"
+          style={{ background: 'var(--as-bg-2)' }}
+        >
+          <SectionTitle
+            right={
+              logs.length > 0 ? (
+                <span className="mono text-[11px]" style={{ color: 'var(--as-text-3)' }}>
+                  {logs.length} frames
+                </span>
+              ) : null
+            }
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <Terminal size={11} /> Backend Log
+            </span>
+          </SectionTitle>
+          <LogConsole lines={logs} connected={busy} />
         </div>
       </div>
     </div>

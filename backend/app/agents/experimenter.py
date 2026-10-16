@@ -121,6 +121,7 @@ class MLExperimentAgent(BaseAgent):
                 f"target column was never resolved: "
                 f"{resolution.get('reason') or 'no target column selected'}"
             )
+        preprocessing_spec = state.get("preprocessing_spec") or {}
         job = self.call_tool(
             "execute_ml_job",
             model_family=inputs["model_family"],
@@ -131,6 +132,7 @@ class MLExperimentAgent(BaseAgent):
             compare_models=self._compare_models(state),
             candidates=self._candidates(state),
             params=dict((state.get("model_spec") or {}).get("params") or {}),
+            preprocessing_spec=preprocessing_spec,
             attempt=int(state.get("attempt") or 0) + 1,
             experiment_id=state.get("experiment_id"),
             dataset_path=(state.get("config") or {}).get("dataset_path"),

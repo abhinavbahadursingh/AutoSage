@@ -42,6 +42,9 @@ class ExecuteMLJobInput(BaseModel):
     dataset_path: Optional[str] = Field(default=None, max_length=1024)
     test_size: float = Field(default=0.2, gt=0.0, lt=1.0)
     random_state: int = Field(default=42, ge=0)
+    #: Preprocessing spec from stage 4 (preprocessor). Consumed by the trainer
+    #: to build the ColumnTransformer instead of hardcoded defaults.
+    preprocessing_spec: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -198,6 +201,8 @@ class ExecuteMLJobTool(BaseTool):
             "CANDIDATE_MODELS": json.dumps(params.families),
             "DATASET_NAME": params.dataset_name,
             "MODEL_PARAMS": json.dumps(params.params),
+            # Preprocessing spec from stage 4 (JSON), consumed by the trainer.
+            "PREPROCESSING_SPEC": json.dumps(params.preprocessing_spec or {}),
             # Already validated against the real file; never default here.
             "TARGET_COLUMN": params.target_column or "",
             "TASK_TYPE": params.task_type or "classification",

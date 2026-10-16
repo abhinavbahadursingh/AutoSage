@@ -1,25 +1,21 @@
 """The SSE stream must re-read the row, not the object it first loaded.
 
 A verification run commits from a *different* session (a FastAPI background
-task). The streaming endpoint holds one session open for the whole run and
-re-reads the row every tick — but ``AsyncSession.get()`` serves the instance
-from its identity map, so without an explicit expiry the client waits forever
-on a run that already finished.
+task). The streaming endpoint opens a fresh session for every poll tick,
+so the client always sees newly committed frames.
 
-``FakeAsyncSession.get()`` hands back the live object every time and therefore
-cannot see this bug: the object mutates under the stream, so the stale read
-looks fresh. ``_IdentityMapSession`` below reproduces the real semantics —
-a snapshot that only refreshes when ``expire_all()`` is called — and the test
-drives the endpoint's own generator tick by tick.
+Each test patches the module-level ``_SESSION_FACTORY`` to return a wrapper
+around its own ``FakeAsyncSession`` so the endpoint reads from the same
+in-memory store the test mutates.
 """
 from __future__ import annotations
 
-import copy
 import uuid
-from typing import Any, AsyncIterator, Optional, Tuple, Type
+from typing import Any, AsyncIterator
 
 import pytest
 
+import app.api.v1.endpoints.objective_verification as ov
 from app.api.v1.endpoints.objective_verification import stream_session
 from app.models.user import User
 from app.models.verification_session import SessionStatus, VerificationSession
@@ -27,33 +23,17 @@ from app.models.workspace import Workspace
 from tests.fakes import FakeAsyncSession
 
 
-class _IdentityMapSession:
-    """AsyncSession-shaped wrapper whose ``get()`` serves a cached snapshot.
+class _SessionFactory:
+    """async-context-manager factory that returns a shared FakeAsyncSession."""
 
-    Mirrors the one behaviour that matters here: an instance already loaded is
-    returned as-is until ``expire_all()`` drops it from the identity map.
-    """
+    def __init__(self, fake: FakeAsyncSession) -> None:
+        self._fake = fake
 
-    def __init__(self, inner: FakeAsyncSession) -> None:
-        self._inner = inner
-        self._snapshot: dict[Tuple[Type, Any], Any] = {}
+    async def __aenter__(self) -> FakeAsyncSession:
+        return self._fake
 
-    async def get(self, entity: Type, pk: Any) -> Optional[Any]:
-        key = (entity, pk)
-        if key not in self._snapshot:
-            row = await self._inner.get(entity, pk)
-            if row is None:
-                return None
-            row = copy.copy(row)
-            row.events = list(row.events or [])
-            self._snapshot[key] = row
-        return self._snapshot[key]
-
-    def expire_all(self) -> None:
-        self._snapshot.clear()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+    async def __aexit__(self, *args: Any) -> None:
+        return None
 
 
 async def _collect(
@@ -79,16 +59,30 @@ async def _collect(
     return "".join(chunks)
 
 
-@pytest.mark.asyncio
-async def test_stream_sees_progress_made_after_it_subscribed() -> None:
-    """Frames committed while the stream is open still reach the client."""
-    fake = FakeAsyncSession()
+def _make_owner_workspace(fake: FakeAsyncSession) -> tuple[User, Workspace]:
     owner = User(id=uuid.uuid4(), email="owner@autosage.local", name="o", is_active=True)
     workspace = Workspace(
         id=uuid.uuid4(), owner_id=owner.id, name="WS", description=None, meta={}
     )
     fake.add(owner)
     fake.add(workspace)
+    return owner, workspace
+
+
+@pytest.fixture(autouse=True)
+def _reset_session_factory():
+    """Restore the real session factory after each test."""
+    prev = ov._SESSION_FACTORY
+    yield
+    ov._SESSION_FACTORY = prev
+
+
+@pytest.mark.asyncio
+async def test_stream_sees_progress_made_after_it_subscribed() -> None:
+    """Frames committed while the stream is open still reach the client."""
+    fake = FakeAsyncSession()
+    ov._SESSION_FACTORY = lambda: _SessionFactory(fake)  # noqa: E731
+    owner, workspace = _make_owner_workspace(fake)
 
     run_id = uuid.uuid4()
     pending = VerificationSession(
@@ -105,7 +99,7 @@ async def test_stream_sees_progress_made_after_it_subscribed() -> None:
     )
     fake.add(pending)
 
-    response = await stream_session(run_id=run_id, user=owner, session=_IdentityMapSession(fake))
+    response = await stream_session(run_id=run_id, user=owner)
     assert response.media_type == "text/event-stream"
     body_iterator = response.body_iterator
 
@@ -141,12 +135,8 @@ async def test_stream_sees_progress_made_after_it_subscribed() -> None:
 async def test_stream_reports_failure_and_stops() -> None:
     """A run that fails mid-way yields an error frame and terminates."""
     fake = FakeAsyncSession()
-    owner = User(id=uuid.uuid4(), email="owner@autosage.local", name="o", is_active=True)
-    workspace = Workspace(
-        id=uuid.uuid4(), owner_id=owner.id, name="WS", description=None, meta={}
-    )
-    fake.add(owner)
-    fake.add(workspace)
+    ov._SESSION_FACTORY = lambda: _SessionFactory(fake)  # noqa: E731
+    owner, workspace = _make_owner_workspace(fake)
 
     run_id = uuid.uuid4()
     fake.add(
@@ -164,7 +154,7 @@ async def test_stream_reports_failure_and_stops() -> None:
         )
     )
 
-    response = await stream_session(run_id=run_id, user=owner, session=_IdentityMapSession(fake))
+    response = await stream_session(run_id=run_id, user=owner)
     iterator = response.body_iterator
     first = await iterator.__anext__()
 
@@ -182,12 +172,8 @@ async def test_stream_reports_failure_and_stops() -> None:
 async def test_stream_keeps_sending_keepalives_during_a_silent_gap() -> None:
     """An idle tick still emits a comment frame, so proxies see traffic."""
     fake = FakeAsyncSession()
-    owner = User(id=uuid.uuid4(), email="owner@autosage.local", name="o", is_active=True)
-    workspace = Workspace(
-        id=uuid.uuid4(), owner_id=owner.id, name="WS", description=None, meta={}
-    )
-    fake.add(owner)
-    fake.add(workspace)
+    ov._SESSION_FACTORY = lambda: _SessionFactory(fake)  # noqa: E731
+    owner, workspace = _make_owner_workspace(fake)
 
     run_id = uuid.uuid4()
     fake.add(
@@ -205,7 +191,7 @@ async def test_stream_keeps_sending_keepalives_during_a_silent_gap() -> None:
         )
     )
 
-    response = await stream_session(run_id=run_id, user=owner, session=_IdentityMapSession(fake))
+    response = await stream_session(run_id=run_id, user=owner)
     iterator = response.body_iterator
 
     # First tick delivers the stored frame... and then, because the run is

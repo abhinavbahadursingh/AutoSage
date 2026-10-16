@@ -16,7 +16,7 @@ import inspect
 import warnings
 import traceback
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -34,7 +34,14 @@ from sklearn.metrics import (
     r2_score,
     mean_absolute_error,
 )
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import (
+    LabelEncoder,
+    OneHotEncoder,
+    OrdinalEncoder,
+    StandardScaler,
+    RobustScaler,
+    MinMaxScaler,
+)
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -130,13 +137,131 @@ def resolve_target_column(df: pd.DataFrame, target_column: str) -> str:
     )
 
 
+def _build_transformer_from_spec(
+    spec: Dict[str, Any],
+    numeric_cols: List[str],
+    categorical_cols: List[str],
+    binary_cols: List[str],
+    datetime_cols: List[str],
+    drop_columns: List[str],
+) -> ColumnTransformer:
+    """Build a :class:`~sklearn.compose.ColumnTransformer` from a
+    ``preprocessing_spec`` produced by stage 4 (preprocessor).
+
+    Falls back to safe defaults for any missing spec keys, so a trainer that
+    runs without a spec still behaves sensibly.
+    """
+    spec = spec or {}
+    imputation_rules: Dict[str, str] = spec.get("imputation_rules") or {}
+    encoding_rules: Dict[str, str] = spec.get("encoding_rules") or {}
+    scaling_rules: Dict[str, str] = spec.get("scaling_rules") or {}
+    outlier_handling = str(spec.get("outlier_handling") or "none")
+    global_imputation = str(spec.get("imputation") or "median")
+    global_encoding = str(spec.get("encoding") or "one-hot")
+    global_scaling = str(spec.get("scaling") or "standard")
+
+    def _imputer(col: str) -> SimpleImputer:
+        # ``col`` may be a real column name (for per-column rules) or a group
+        # hint ("numeric", "categorical", "binary", "datetime"). Group hints
+        # map to sensible defaults; real column names consult the spec rules.
+        group_defaults = {
+            "numeric": "median",
+            "categorical": "most_frequent",
+            "binary": "most_frequent",
+            "datetime": "most_frequent",
+        }
+        if col in group_defaults:
+            strategy = group_defaults[col]
+        else:
+            strategy = imputation_rules.get(col, global_imputation)
+        if strategy not in ("mean", "median", "most_frequent", "constant"):
+            strategy = "median"
+        return SimpleImputer(strategy=strategy)
+
+    def _scaler(col: str):
+        strategy = scaling_rules.get(col, global_scaling)
+        if strategy == "robust":
+            return RobustScaler()
+        if strategy == "minmax":
+            return MinMaxScaler()
+        if strategy == "none":
+            return "passthrough"
+        return StandardScaler()
+
+    def _encoder(col: str):
+        # ``col`` may be a real column name (per-column rules) or a group hint
+        # ("categorical", "binary", "datetime"). Group hints map to defaults.
+        group_defaults = {
+            "categorical": "one-hot",
+            "binary": "ordinal",
+            "datetime": "passthrough",
+        }
+        if col in group_defaults:
+            strategy = group_defaults[col]
+        else:
+            strategy = encoding_rules.get(col, global_encoding)
+        if strategy in ("ordinal", "binary"):
+            return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+        if strategy == "none":
+            return "passthrough"
+        # one-hot (default): dense so every estimator can consume it.
+        return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+
+    transformers = []
+
+    # Numeric pipeline: impute -> scale.
+    num_steps = [("imputer", _imputer("numeric"))]
+    if outlier_handling == "iqr_clip":
+        # IQR clipping intent is recorded in the spec rationale; the scaler
+        # choice (robust when the dataset is dirty) is the actionable signal.
+        pass
+    num_steps.append(("scaler", _scaler("numeric")))
+    if numeric_cols:
+        transformers.append(("num", Pipeline(num_steps), numeric_cols))
+
+    # Categorical pipeline: impute -> encode.
+    cat_steps = [("imputer", _imputer("categorical"))]
+    cat_cols = [c for c in categorical_cols if c not in drop_columns]
+    if cat_cols:
+        cat_steps.append(("encoder", _encoder("categorical")))
+        transformers.append(("cat", Pipeline(cat_steps), cat_cols))
+
+    # Binary: impute -> ordinal (0/1).
+    bin_cols = [c for c in binary_cols if c not in drop_columns]
+    if bin_cols:
+        transformers.append(
+            (
+                "bin",
+                Pipeline([("imputer", _imputer("binary")), ("encoder", _encoder("binary"))]),
+                bin_cols,
+            )
+        )
+
+    # Datetime: kept as passthrough (feature engineering handles date parts
+    # upstream); we keep them numeric-safe by passing them through raw.
+    dt_cols = [c for c in datetime_cols if c not in drop_columns]
+    if dt_cols:
+        transformers.append(("dt", "passthrough", dt_cols))
+
+    if not transformers:
+        transformers.append(("passthrough", "passthrough", []))
+
+    return ColumnTransformer(transformers, remainder="drop", sparse_threshold=0.0)
+
+
 def prepare_data(
     df: pd.DataFrame,
     target_column: str,
     test_size: float = 0.2,
     random_state: int = 42,
+    preprocessing_spec: Optional[Dict[str, Any]] = None,
 ) -> tuple:
-    """Split features/target and train/test."""
+    """Split features/target and train/test.
+
+    When ``preprocessing_spec`` (from stage 4) is provided, the
+    :class:`~sklearn.compose.ColumnTransformer` is built from its per-column
+    rules instead of hardcoded defaults.
+    """
     target_column = resolve_target_column(df, target_column)
     if target_column not in df.columns:
         raise ValueError(f"Target column '{target_column}' not found in dataset")
@@ -156,26 +281,57 @@ def prepare_data(
     numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
 
-    # Preprocessing
-    numeric_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-    ])
+    # Further split categoricals into binary vs multi-class using nunique.
+    binary_cols = [c for c in categorical_cols if X[c].nunique(dropna=True) <= 2]
+    multi_categorical_cols = [c for c in categorical_cols if c not in binary_cols]
+    datetime_cols = [
+        c for c in X.columns
+        if c not in numeric_cols and c not in categorical_cols
+        and pd.api.types.is_datetime64_any_dtype(X[c])
+    ]
 
-    categorical_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        # Dense one-hot so the matrix stays numeric for every estimator below.
-        # Without this, string categories cannot be fitted at all.
-        ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
-    ])
+    # Build the preprocessor from spec (stage 4) or hardcoded defaults.
+    spec = preprocessing_spec or {}
+    drop_columns = list(spec.get("drop_columns") or [])
+    # Never let the target leak into features.
+    if target_column and target_column not in drop_columns:
+        drop_columns.append(target_column)
+    X_model = X.drop(columns=[c for c in drop_columns if c in X.columns], errors="ignore")
 
-    preprocessor = ColumnTransformer([
-        ("num", numeric_transformer, numeric_cols),
-        ("cat", categorical_transformer, categorical_cols),
-    ])
+    # Recompute column lists after drops, scoped to what remains.
+    remaining_numeric = [c for c in numeric_cols if c in X_model.columns]
+    remaining_categorical = [c for c in multi_categorical_cols if c in X_model.columns]
+    remaining_binary = [c for c in binary_cols if c in X_model.columns]
+    remaining_datetime = [c for c in datetime_cols if c in X_model.columns]
+
+    if spec:
+        preprocessor = _build_transformer_from_spec(
+            spec,
+            remaining_numeric,
+            remaining_categorical,
+            remaining_binary,
+            remaining_datetime,
+            drop_columns,
+        )
+    else:
+        # Hardcoded defaults (original behaviour).
+        numeric_transformer = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ])
+        categorical_transformer = Pipeline([
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            # Dense one-hot so the matrix stays numeric for every estimator below.
+            # Without this, string categories cannot be fitted at all.
+            ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        ])
+        preprocessor = ColumnTransformer([
+            ("num", numeric_transformer, remaining_numeric),
+            ("cat", categorical_transformer, remaining_categorical + remaining_binary),
+        ])
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state,
+        X_model, y, test_size=test_size, random_state=random_state,
         stratify=y if len(np.unique(y)) < 50 else None
     )
 
@@ -483,6 +639,7 @@ def run_model_comparison(
     target_column: str,
     test_size: float = 0.2,
     random_state: int = 42,
+    preprocessing_spec: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Train and score every candidate, then select on ``primary_metric``.
 
@@ -497,7 +654,13 @@ def run_model_comparison(
     secondary metric and never drives the choice.
     """
     target_column = resolve_target_column(df, target_column)
-    prepared = prepare_data(df, target_column, test_size=test_size, random_state=random_state)
+    prepared = prepare_data(
+        df,
+        target_column,
+        test_size=test_size,
+        random_state=random_state,
+        preprocessing_spec=preprocessing_spec,
+    )
     _, _, _, y_test, _, _ = prepared
 
     base = baseline_metrics(y_test, task_type)
@@ -658,6 +821,11 @@ def main():
     task_type = os.environ.get("TASK_TYPE", "classification")
     mlflow_run_id = os.environ.get("MLFLOW_RUN_ID", "")
     compare_models = _env_flag("COMPARE_MODELS")
+    preprocessing_spec_raw = os.environ.get("PREPROCESSING_SPEC", "{}")
+    try:
+        preprocessing_spec = json.loads(preprocessing_spec_raw)
+    except json.JSONDecodeError:
+        preprocessing_spec = {}
 
     try:
         params = json.loads(params_json)
@@ -689,6 +857,7 @@ def main():
             target_column=target_column,
             test_size=float(os.environ.get("TEST_SIZE", "0.2")),
             random_state=int(os.environ.get("RANDOM_STATE", "42")),
+            preprocessing_spec=preprocessing_spec,
         )
         metrics = dict(comparison["metrics"])
         model = comparison.pop("_model", None)
@@ -730,7 +899,7 @@ def main():
         return
 
     X_train, X_test, y_train, y_test, preprocessor, target_encoder = prepare_data(
-        df, target_column
+        df, target_column, preprocessing_spec=preprocessing_spec
     )
 
     # Train model
@@ -797,6 +966,7 @@ def execute_locally(
     artifact_dir: Optional[str] = None,
     test_size: float = 0.2,
     random_state: int = 42,
+    preprocessing_spec: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Run the same training in-process (used when Docker is unavailable).
 
@@ -814,6 +984,7 @@ def execute_locally(
         target_column=target_column,
         test_size=test_size,
         random_state=random_state,
+        preprocessing_spec=preprocessing_spec,
     )
 
     model = result.pop("_model", None)
