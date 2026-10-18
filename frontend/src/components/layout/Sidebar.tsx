@@ -39,6 +39,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Operate',
     items: [
       { to: '/objectives', label: 'Objectives', icon: Target },
+      { to: '/project-summary', label: 'Project Summary', icon: LayoutGrid },
       { to: '/pipeline', label: 'Pipeline', icon: GitBranch },
       { to: '/sandbox', label: 'Sandbox', icon: Terminal },
       { to: '/experiments', label: 'Experiments', icon: FlaskConical },

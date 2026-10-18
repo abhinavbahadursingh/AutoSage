@@ -73,6 +73,15 @@ class VerificationSession(Base):
         nullable=False,
         index=True,
     )
+    #: Optional pipeline experiment whose recorded facts (decisions, evidence
+    #: nodes, metrics, verification status) this session's objective checks
+    #: will inspect instead of this session's own (empty) experiment.
+    linked_experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     # -- the verbatim input this session was created from -------------------
     problem_statement = Column(Text, nullable=False)
@@ -113,7 +122,7 @@ class VerificationSession(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
-    experiment = relationship("Experiment", lazy="selectin")
+    experiment = relationship("Experiment", lazy="selectin", foreign_keys=[experiment_id])
     workspace = relationship("Workspace", lazy="selectin")
     owner = relationship("User", lazy="selectin")
 

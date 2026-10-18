@@ -28,6 +28,7 @@ import { LoginPage } from './pages/Login'
 import { SandboxPage } from './pages/Sandbox'
 import { PipelinePage } from './pages/Pipeline'
 import { ObjectivesPage } from './pages/Objectives'
+import { ProjectSummaryPage } from './pages/ProjectSummary'
 
 function ProtectedRoute() {
   const { authReady, user } = useStore()
@@ -146,6 +147,7 @@ function AnimatedRoutes() {
             <Route path="/sandbox"     element={<PageTransition><SandboxPage /></PageTransition>} />
             <Route path="/pipeline"    element={<PageTransition><PipelinePage /></PageTransition>} />
             <Route path="/objectives"  element={<PageTransition><ObjectivesPage /></PageTransition>} />
+            <Route path="/project-summary" element={<PageTransition><ProjectSummaryPage /></PageTransition>} />
           </Route>
         </Route>
 

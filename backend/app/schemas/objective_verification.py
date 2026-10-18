@@ -291,6 +291,7 @@ class SessionStateResponse(BaseModel):
 
     run_id: str
     experiment_id: str
+    linked_experiment_id: Optional[uuid.UUID] = None
     status: str
     problem_statement: str
     dataset_name: str
@@ -313,6 +314,118 @@ class SessionStateResponse(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class SessionSummary(BaseModel):
+    """Cheap listing row for one of the caller's verification sessions.
+
+    Discovery only — no frame history or report payload. The heavy per-run
+    detail is still read through ``GET /sessions/{run_id}``. The verbatim
+    ``problem_statement`` is included so a listing can show *what the caller
+    asked* without N detail round trips.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    experiment_id: str
+    linked_experiment_id: Optional[uuid.UUID] = None
+    #: What the caller asked, verbatim as submitted.
+    problem_statement: str
+    dataset_name: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+    status: str
+    overall_status: Optional[str] = None
+    overall_confidence: Optional[float] = None
+    #: Number of design+code decisions recorded for this run.
+    decision_count: int = 0
+    #: Number of streamed progress frames persisted so far.
+    stage_count: int = 0
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
+class BriefRequest(BaseModel):
+    """Section 1 of a project brief — the request exactly as the caller gave it."""
+
+    problem_statement: str
+    dataset_name: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class BriefUnderstanding(BaseModel):
+    """Section 2 — what the system read into the phrase, in plain words."""
+
+    #: One of detection | churn | anomaly | forecasting | estimation |
+    #: grouping | ranking | supervised-prediction.
+    goal_kind: str
+    #: One line: the semantic interpretation of the request.
+    headline: str
+    #: Plain-language sentences unpacking that interpretation.
+    detail: List[str] = Field(default_factory=list)
+
+
+class BriefFramed(BaseModel):
+    """Section 3 — the formal problem statement the analysis framed."""
+
+    statement: str
+    problem_type: Optional[str] = None
+    target: str
+    metric: str
+    evaluation: str
+
+
+class BriefStep(BaseModel):
+    """One concrete step the pipeline recorded while understanding the need."""
+
+    step: int
+    title: str
+    detail: str
+    confidence: Optional[float] = None
+    #: Which record backs this step ('pipeline decision: data_discovery', ...).
+    origin: str
+
+
+class BriefThinking(BaseModel):
+    """Section 5 — the thought process the agents actually recorded."""
+
+    approach: List[str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list)
+    alternatives: List[str] = Field(default_factory=list)
+    validation_strategy: Optional[str] = None
+
+
+class BriefOutcome(BaseModel):
+    """Section 6 — what the work actually produced, in plain words."""
+
+    available: bool = False
+    algorithm: Optional[str] = None
+    primary_metric: Optional[str] = None
+    primary_score: Optional[float] = None
+    baseline_score: Optional[float] = None
+    gate_passed: Optional[bool] = None
+    gate_summary: Optional[str] = None
+
+
+class ProjectBrief(BaseModel):
+    """A spoken-word walkthrough of ONE given project, built from its records.
+
+    This is deliberately NOT a verification report: the objective checks stay
+    on the Objectives page. Every sentence here traces to a stored record
+    (the verbatim request, the pipeline's decision rows, the design record or
+    the measured result) — nothing is invented.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    request: BriefRequest
+    understanding: BriefUnderstanding
+    framed: BriefFramed
+    requirements: List[BriefStep] = Field(default_factory=list)
+    thinking: BriefThinking
+    outcome: BriefOutcome
+
+
 class SessionDataset(BaseModel):
     """A dataset the caller may submit for a fresh session."""
 
@@ -321,3 +434,16 @@ class SessionDataset(BaseModel):
     name: str
     size_bytes: Optional[int] = None
     dataset_id: Optional[str] = None
+
+
+class LinkExperimentRequest(BaseModel):
+    """Link a completed pipeline experiment to this verification session.
+
+    Objective checks read facts (decisions, evidence nodes, metrics,
+    verification status) from the linked experiment instead of this
+    session's own empty experiment.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_id: uuid.UUID

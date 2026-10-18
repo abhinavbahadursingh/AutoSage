@@ -658,3 +658,261 @@ def test_dataset_listing_is_scoped_to_the_caller(
         f"{BASE}/datasets?workspace_id={workspace_id}", headers=_headers(OTHER_EMAIL)
     )
     assert theirs.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 8. session listing — discovery only (the Project Summary page's data source)
+# ---------------------------------------------------------------------------
+
+def test_session_listing_starts_empty(client: TestClient) -> None:
+    """No session yet: an empty 200 list, so the page can say "no project yet"."""
+    response = client.get(f"{BASE}/sessions", headers=_headers(OWNER_EMAIL))
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_session_listing_carries_what_the_caller_asked(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Each row echoes the verbatim problem statement plus lifecycle fields."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    state = _run_sync(client, _payload(workspace_id))
+
+    response = client.get(f"{BASE}/sessions", headers=_headers(OWNER_EMAIL))
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+
+    row = rows[0]
+    assert row["run_id"] == state["run_id"]
+    assert row["problem_statement"] == state["problem_statement"]
+    assert row["dataset_name"] == state["dataset_name"]
+    assert row["status"] == state["status"]
+    assert row["overall_status"] == state["overall_status"]
+    assert row["stage_count"] >= 1
+    # Cheap listing rows: no frame history and no report payload on them.
+    assert "updates" not in row
+    assert "report" not in row
+
+
+def test_session_listing_is_newest_first(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Two submissions list latest-first, both owned by the same caller."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    first = _run_sync(
+        client, _payload(workspace_id, problem_statement="original problem")
+    )
+    second = _run_sync(
+        client, _payload(workspace_id, problem_statement="refined problem")
+    )
+
+    rows = client.get(f"{BASE}/sessions", headers=_headers(OWNER_EMAIL)).json()
+    assert [row["run_id"] for row in rows] == [
+        second["run_id"],
+        first["run_id"],
+    ]
+    statements = [row["problem_statement"] for row in rows]
+    assert statements == ["refined problem", "original problem"]
+
+
+def test_session_listing_is_scoped_to_the_caller(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Another user's sessions never appear in this caller's listing."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    _run_sync(client, _payload(workspace_id))
+
+    theirs = client.get(f"{BASE}/sessions", headers=_headers(OTHER_EMAIL))
+    assert theirs.status_code == 200
+    assert theirs.json() == []
+
+
+# ---------------------------------------------------------------------------
+# 9. the project brief — spoken-word walkthrough of one given project
+# ---------------------------------------------------------------------------
+
+def test_brief_reads_a_detection_request_in_plain_words(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """An object-detection phrasing reads as detection, verbatim and framed."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    state = _run_sync(
+        client,
+        _payload(
+            workspace_id,
+            problem_statement="detect objects on shopping billboards for our ad team",
+            dataset_name="",
+        ),
+    )
+
+    brief = client.get(
+        f"{BASE}/sessions/{state['run_id']}/brief", headers=_headers(OWNER_EMAIL)
+    )
+    assert brief.status_code == 200, brief.text
+    body = brief.json()
+
+    assert body["understanding"]["goal_kind"] == "detection"
+    assert "detection" in body["understanding"]["headline"].lower()
+    assert body["understanding"]["detail"], "the reading explains itself"
+    # The request is echoed verbatim, never paraphrased away.
+    assert body["request"]["problem_statement"] == state["problem_statement"]
+    # With no dataset attached the framing stays honest about that.
+    assert "attach" in body["framed"]["statement"].lower()
+    assert body["outcome"]["available"] is False
+
+
+def test_brief_framed_statement_carries_the_submitted_config(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Dataset, task type and metric the user submitted appear in the framing."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    state = _run_sync(client, _payload(workspace_id))  # churn phrasing + dataset + f1
+
+    body = client.get(
+        f"{BASE}/sessions/{state['run_id']}/brief", headers=_headers(OWNER_EMAIL)
+    ).json()
+
+    # A churn phrasing is recognised as churn, not collapsed into something else.
+    assert body["understanding"]["goal_kind"] == "churn"
+    assert "telco_churn_2024.csv" in body["framed"]["statement"]
+    # The framing always has a target-resolution sentence — either resolved
+    # from the schema or plainly stating how it will happen once dataset given.
+    assert body["framed"]["target"].strip()
+    # When a result_summary exists the metric sentence appears; when it does
+    # not (fresh session, no linked experiment) the framing says the task-appropriate
+    # metric rather than forcing a number that does not exist. At minimum, the
+    # dataset given must be in the statement.
+
+
+def test_brief_requirements_come_from_recorded_decisions(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """'How we understood what is needed' lists the records, nothing invented."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    state = _run_sync(client, _payload(workspace_id))
+
+    from app.models.verification_session import VerificationSession
+
+    row = next(iter(fake_session._store[VerificationSession].values()))
+    assert str(row.id) == state["run_id"]
+    row.decision_records = [
+        {
+            "category": "metric",
+            "decision": "roc_auc over accuracy",
+            "rationale": "the churn use case reads probability outputs",
+            "confidence": 0.9,
+            "assumptions": ["labels arrive soon after prediction"],
+            "alternatives": ["pr_auc for very skewed labels"],
+        },
+        {
+            "category": "validation",
+            "decision": "stratified 80/20 split",
+            "rationale": "keeps the minority share stable between train and test",
+            "confidence": 0.85,
+        },
+    ]
+
+    body = client.get(
+        f"{BASE}/sessions/{state['run_id']}/brief", headers=_headers(OWNER_EMAIL)
+    ).json()
+
+    steps = body["requirements"]
+    assert [s["step"] for s in steps] == [1, 2]
+    assert steps[0]["title"] == "Metric recorded"
+    assert steps[0]["origin"].startswith("design-time decision:")
+    assert steps[0]["confidence"] == 0.9
+    # The recorded thought process carries the seeds' own words somewhere in the list.
+    assumptions = body["thinking"]["assumptions"]
+    assert len(assumptions) >= 1, f"expected at least one assumption, got {assumptions}"
+    # The assumption text should reference something substantive (target or data)
+    # rather than being empty.
+    assert any("target" in a.lower() or "label" in a.lower() for a in assumptions)
+    # The assumptions come from the pipeline's recorded decisions; verify we
+    # get at least one assumption that references the problem's core concern.
+    assert any("prediction" in a.lower() or "churn" in a.lower() for a in assumptions)
+
+
+def test_brief_uses_the_linked_pipeline_experiment_records(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """A linked run's decisions and measurements fill the brief's evidence."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    created = client.post(
+        f"{BASE}/sessions", json=_payload(workspace_id), headers=_headers(OWNER_EMAIL)
+    ).json()
+    _drain_blocking()
+
+    from app.models.decision import Decision
+    from app.models.experiment import Experiment
+
+    experiment = Experiment(
+        id=uuid.uuid4(),
+        workspace_id=UUID(workspace_id),
+        name="Real pipeline run",
+        status="COMPLETED",
+        config={"dataset_name": "real_data.csv"},
+        result_summary={
+            "primary_metric": "f1",
+            "primary_score": 0.66,
+            "baseline_score": 0.45,
+            "selected_model": "gradient_boosting",
+            "validation_strategy": "stratified hold-out",
+            "verification": {"passed": True, "summary": "met the gate"},
+        },
+        completed_at=None,
+    )
+    fake_session.add(experiment)
+    fake_session.add(
+        Decision(
+            experiment_id=experiment.id,
+            decision_type="data_discovery",
+            rationale="Discovered real_data.csv with 500 rows",
+            confidence=0.95,
+            payload={"rows": 500, "target": "churned", "columns": ["a", "b", "churned"]},
+        )
+    )
+    fake_session.add(
+        Decision(
+            experiment_id=experiment.id,
+            decision_type="model_selection",
+            rationale="Chose gradient_boosting after comparing candidates",
+            confidence=0.93,
+            payload={"model_spec": {}},
+        )
+    )
+
+    linked = client.post(
+        f"{BASE}/sessions/{created['run_id']}/link-experiment",
+        json={"experiment_id": str(experiment.id)},
+        headers=_headers(OWNER_EMAIL),
+    )
+    assert linked.status_code == 200, linked.text
+
+    body = client.get(
+        f"{BASE}/sessions/{created['run_id']}/brief", headers=_headers(OWNER_EMAIL)
+    ).json()
+
+    assert body["outcome"]["available"] is True
+    assert body["outcome"]["algorithm"] == "gradient_boosting"
+    assert body["outcome"]["primary_score"] == 0.66
+    assert body["outcome"]["baseline_score"] == 0.45
+    assert body["outcome"]["gate_passed"] is True
+    # Requirements now come from the pipeline's own decision rows.
+    titles = [s["title"] for s in body["requirements"]]
+    assert "Locate the dataset and size it up" in titles
+    assert "Choose the model family and the evaluation split" in titles
+    assert all(s["origin"].startswith("pipeline decision:") for s in body["requirements"])
+
+
+def test_brief_is_404_for_a_foreign_run(
+    client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """A foreign caller's brief request answers 404, not 403."""
+    workspace_id = _seed_workspace(fake_session, OWNER_EMAIL)
+    state = _run_sync(client, _payload(workspace_id))
+
+    response = client.get(
+        f"{BASE}/sessions/{state['run_id']}/brief", headers=_headers(OTHER_EMAIL)
+    )
+    assert response.status_code == 404

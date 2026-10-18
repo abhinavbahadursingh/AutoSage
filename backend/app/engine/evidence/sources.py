@@ -5,10 +5,12 @@ external systems that will be fleshed out in later phases.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -194,12 +196,137 @@ class MemoryEvidenceSource(EvidenceSource):
         )
 
 
+class WebEvidenceSource(EvidenceSource):
+    """Real web search evidence source.
+
+    Searches the internet via DuckDuckGo's HTML endpoint (no API key
+    required) and returns results as verifiable evidence pieces. Every
+    result carries a URL so claims can be independently corroborated.
+    """
+
+    source_id = "web_search"
+    source_type = "web"
+    _BASE_URL = "https://html.duckduckgo.com/html/"
+
+    def __init__(self, timeout_seconds: float = 15.0):
+        self.timeout_seconds = timeout_seconds
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> EvidenceSearchResult:
+        """Search the live web via DuckDuckGo HTML."""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                resp = await client.post(
+                    self._BASE_URL,
+                    data={"q": query},
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0 Safari/537.36",
+                    },
+                )
+                resp.raise_for_status()
+                html = resp.text
+        except Exception as exc:  # noqa: BLE001 - web search is best-effort
+            return EvidenceSearchResult(
+                query=query,
+                pieces=[],
+                total_found=0,
+                search_metadata={
+                    "source": self.source_id,
+                    "error": f"web search unavailable: {type(exc).__name__}",
+                },
+            )
+
+        pieces = self._parse_results(html, limit)
+        return EvidenceSearchResult(
+            query=query,
+            pieces=pieces,
+            total_found=len(pieces),
+            search_metadata={"source": self.source_id, "engine": "duckduckgo"},
+        )
+
+    def _parse_results(self, html: str, limit: int) -> List[EvidencePiece]:
+        """Extract result titles, URLs and snippets from DuckDuckGo HTML."""
+        pieces: List[EvidencePiece] = []
+
+        # DuckDuckGo result blocks look like:
+        # <a rel="nofollow" class="result__a" href="URL">TITLE</a>
+        # <a class="result__snippet" ...>SNIPPET</a>
+        result_pattern = re.compile(
+            r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            re.DOTALL | re.IGNORECASE,
+        )
+        snippet_pattern = re.compile(
+            r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+            re.DOTALL | re.IGNORECASE,
+        )
+
+        urls = result_pattern.findall(html)
+        snippets = snippet_pattern.findall(html)
+
+        for i, (raw_url, raw_title) in enumerate(urls[:limit]):
+            title = re.sub(r"<[^>]+>", "", raw_title or "").strip()
+            title = re.sub(r"\s+", " ", title)
+            snippet = ""
+            if i < len(snippets):
+                snippet = re.sub(r"<[^>]+>", "", snippets[i] or "").strip()
+                snippet = re.sub(r"\s+", " ", snippet)
+            # DuckDuckGo uses a redirect URL; extract the actual destination.
+            url = self._unwrap_ddg_redirect(raw_url)
+            if not title or not url:
+                continue
+            pieces.append(
+                EvidencePiece(
+                    content=snippet or title,
+                    source_id=self.source_id,
+                    source_type=self.source_type,
+                    title=title,
+                    url=url,
+                    snippet=snippet or None,
+                    credibility_score=0.7,  # web results are corroborative, not authoritative
+                    metadata={"engine": "duckduckgo", "result_index": i},
+                    retrieved_at=datetime.utcnow(),
+                )
+            )
+
+        return pieces
+
+    @staticmethod
+    def _unwrap_ddg_redirect(url: str) -> str:
+        """Extract the destination URL from a DuckDuckGo redirect link."""
+        if not url:
+            return url
+        # DDG links look like //duckduckgo.com/l/?uddg=ENCODED_URL
+        m = re.search(r"uddg=([^&]+)", url)
+        if m:
+            from urllib.parse import unquote
+
+            return unquote(m.group(1))
+        return url
+
+
+# Auto-register session-independent sources at import time so the evidence
+# source registry is populated regardless of which code path runs
+# (objective verification, Phase 12 verification, etc.). Sources that need a
+# database session are still registered via register_builtin_sources().
+_auto_registered: List[EvidenceSource] = []
+for _src in (MockExternalEvidenceSource(), WebEvidenceSource()):
+    register_evidence_source(_src)
+    _auto_registered.append(_src)
+
+
 # Auto-register built-in sources (will be instantiated with session when used)
 def register_builtin_sources(session: AsyncSession) -> List[EvidenceSource]:
     """Register all built-in evidence sources with a database session."""
     sources = [
         InternalEvidenceSource(session),
         MockExternalEvidenceSource(),
+        WebEvidenceSource(),
         MemoryEvidenceSource(session),
     ]
     for src in sources:

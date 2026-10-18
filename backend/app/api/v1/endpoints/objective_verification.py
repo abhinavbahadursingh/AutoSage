@@ -8,16 +8,19 @@ that owns its own experiment.
 **This API never preprocesses a dataset, trains a model, or retrains
 anything.** It issues reads and source inspection only.
 
-There is no experiment picker and no "latest run" endpoint. A run id is issued
+There is no experiment picker and no resume path. A run id is issued
 by ``POST /sessions`` and is valid only for the session it was issued for and
 only for the user who created it; every read re-checks ownership and answers
-404 rather than 403 so a foreign run is not even acknowledged.
+404 rather than 403 so a foreign run is not even acknowledged. The listing
+route (``GET /sessions``) only discovers sessions already created that way —
+it never selects or reuses an experiment for a new run.
 
 Routes (mounted under ``/api/v1``)::
 
     GET  /objective-verification/objectives        the fixed four-objective graph
     GET  /objective-verification/stages            the fixed stage order
     GET  /objective-verification/datasets          datasets usable for a session
+    GET  /objective-verification/sessions          the caller's recent sessions (listing)
     POST /objective-verification/sessions          create a session, get a run id
     GET  /objective-verification/sessions/{run_id}          status + report
     GET  /objective-verification/sessions/{run_id}/stream  SSE progress
@@ -41,9 +44,12 @@ from app.engine.objective_verification.runner import ALL_STAGES
 from app.schemas.objective_verification import (
     FreshSessionAccepted,
     FreshSessionCreate,
+    LinkExperimentRequest,
     ObjectiveDefinition,
+    ProjectBrief,
     SessionDataset,
     SessionStateResponse,
+    SessionSummary,
     StageStatus,
 )
 from app.services import objective_verification_service as svc
@@ -153,6 +159,46 @@ async def list_session_datasets(
     return await service.list_session_datasets(user.id, workspace_id)
 
 
+@router.get(
+    "/sessions",
+    response_model=List[SessionSummary],
+    summary="The caller's recent verification sessions, newest first",
+)
+async def list_sessions(
+    user: CurrentUser,
+    session: DbSession,
+    limit: int = Query(20, ge=1, le=100, description="Max sessions to return"),
+) -> List[SessionSummary]:
+    """List this user's sessions for discovery (e.g. the Project Summary page).
+
+    Ownership is enforced here exactly like on the single-session read: only
+    sessions created by ``user`` are returned, and only cheap listing rows —
+    the verbatim problem statement plus lifecycle fields, never the frame
+    history or the full report payload.
+    """
+    service = svc.FreshVerificationService(session)
+    rows = await service.list_sessions(user.id, limit=limit)
+    return [
+        SessionSummary(
+            run_id=str(row.id),
+            experiment_id=str(row.experiment_id),
+            linked_experiment_id=row.linked_experiment_id,
+            problem_statement=row.problem_statement,
+            dataset_name=row.dataset_name,
+            config=row.config or {},
+            status=row.status,
+            overall_status=row.overall_status,
+            overall_confidence=row.overall_confidence,
+            decision_count=len(row.decision_records or []),
+            stage_count=len(row.events or []),
+            created_at=row.created_at,
+            completed_at=row.completed_at,
+            error=row.error,
+        )
+        for row in rows
+    ]
+
+
 @router.post(
     "/sessions",
     response_model=FreshSessionAccepted,
@@ -203,6 +249,45 @@ async def create_session(
     )
 
 
+@router.post(
+    "/sessions/{run_id}/link-experiment",
+    summary="Link a completed pipeline experiment to this verification session",
+)
+async def link_experiment(
+    run_id: uuid.UUID,
+    payload: LinkExperimentRequest,
+    user: CurrentUser,
+    session: DbSession,
+):
+    """Link a completed pipeline experiment to this verification session.
+
+    Objective checks (Objective 4 especially) read facts — decisions,
+    evidence nodes, metrics, verification status — from the linked
+    experiment's records instead of this session's own empty experiment.
+
+    The linked experiment must be COMPLETED and in the same workspace.
+    """
+    from app.schemas.objective_verification import LinkExperimentRequest as _LER
+
+    assert isinstance(payload, _LER)
+    service = svc.FreshVerificationService(session)
+    try:
+        row = await service.link_experiment(
+            run_id=run_id,
+            owner_id=user.id,
+            linked_experiment_id=payload.experiment_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return {
+        "run_id": str(row.id),
+        "linked_experiment_id": str(row.linked_experiment_id),
+        "status": row.status,
+    }
+
+
 @router.get(
     "/sessions/{run_id}",
     response_model=SessionStateResponse,
@@ -223,6 +308,33 @@ async def get_session(run_id: uuid.UUID, user: CurrentUser, session: DbSession) 
             detail="Verification session not found",
         ) from exc
     return service.to_state(row)
+
+
+@router.get(
+    "/sessions/{run_id}/brief",
+    response_model=ProjectBrief,
+    summary="Plain-language project walkthrough of one given project",
+)
+async def get_session_brief(
+    run_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> ProjectBrief:
+    """The project brief: what was said, what it reads as, how it was framed.
+
+    Built from the session's stored records only — the verbatim request, the
+    deterministic interpretation, the pipeline experiment's own decision
+    rows, the design record and the measured outcome. It is NOT the
+    objective-verification report; the four objectives stay on the Objectives
+    page.
+    """
+    service = svc.FreshVerificationService(session)
+    try:
+        row = await service.get_owned_session(run_id, user.id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Verification session not found",
+        ) from exc
+    return await service.build_project_brief(row)
 
 
 @router.get(

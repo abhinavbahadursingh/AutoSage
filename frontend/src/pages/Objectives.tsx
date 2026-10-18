@@ -97,21 +97,36 @@ function ProblemInput({
   busy,
   hint,
   compact = false,
+  prompt,
 }: {
   onSubmit: (problem: string) => void
   busy: boolean
   hint?: string
   /**
-   * A session is already on screen. The full block (header, 3-row field,
-   * examples, button) would push the results below the fold, so it starts as
-   * a single line and only unfolds once the user reaches for it.
+   * A session is already on screen, or one is starting. The full block
+   * (header, 3-row field, examples, button) would push the results below the
+   * fold, so it starts as a single line and only unfolds once the user
+   * reaches for it.
    */
   compact?: boolean
+  /**
+   * The prompt this session was started from. Whenever the field is empty —
+   * folded or unfolded, starting or finished — it echoes the prompt as its
+   * placeholder, so the box always reads as the query that is running (or
+   * ran) instead of a generic hint.
+   */
+  prompt?: string | null
 }) {
   const [problem, setProblem] = useState('')
   const [focused, setFocused] = useState(false)
 
   const valid = problem.trim().length >= 8
+
+  // The empty field echoes the prompt this session was started from — while
+  // it starts and after it finishes, folded or unfolded. Keep it to one
+  // readable line; the full text stays on the field's tooltip.
+  const promptText = prompt?.trim() ?? ''
+  const promptHint = promptText.length > 160 ? `${promptText.slice(0, 159)}…` : promptText
 
   // Unfold only on intent (focus) or while there is text — collapsing on blur
   // with text present would move the button out from under the click.
@@ -136,10 +151,12 @@ function ProblemInput({
           value={problem}
           onChange={(e) => setProblem(e.target.value)}
           placeholder={
-            expanded
+            promptHint ||
+            (expanded
               ? 'e.g. Predict which customers will churn next month based on usage and billing history...'
-              : 'Describe a new ML problem — it starts a new session.'
+              : 'Describe a new ML problem — it starts a new session.')
           }
+          title={promptText && promptHint !== promptText ? promptText : undefined}
           rows={expanded ? 3 : 1}
           className={`w-full resize-none rounded-lg border outline-none transition-colors ${
             expanded
@@ -192,7 +209,15 @@ function ProblemInput({
           <button
             type="button"
             disabled={!valid || busy}
-            onClick={() => valid && onSubmit(problem.trim())}
+            onClick={() => {
+              if (!valid) return
+              // Hand the prompt over and reset the field: the submitted text
+              // lives in the session bar above, and leaving it here would pin
+              // the block open (text forces the expanded layout) instead of
+              // minimising to the single line.
+              onSubmit(problem.trim())
+              setProblem('')
+            }}
             className="flex h-[36px] items-center gap-2 rounded-lg px-5 text-[13.5px] font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40"
             style={{
               background: 'var(--as-accent)',
@@ -458,10 +483,18 @@ export function ObjectivesPage() {
   const [stages, setStages] = useState<string[]>([])
 
   const [runId, setRunId] = useState<string | null>(null)
+  // The prompt the on-screen session was started from. The minimised query
+  // bar shows it as its placeholder, so the folded bar always reads as the
+  // query that is running (or ran) instead of a blank hint.
+  const [lastProblem, setLastProblem] = useState<string | null>(null)
   const [report, setReport] = useState<ObjectiveVerificationReport | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  //: Experiment ID linked to this verification session (if any). Objective 4
+  //: checks read facts from the linked experiment instead of this session's
+  //: own empty experiment.
+  const [linkedExperimentId, setLinkedExperimentId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const [stageStates, setStageStates] = useState<Record<string, StageState>>({})
   const [checkStatuses, setCheckStatuses] = useState<Record<string, ObjectiveCheckStatus>>({})
@@ -499,6 +532,7 @@ export function ObjectivesPage() {
     setGeneratedFileNames([])
     setCodeGenerationStatus('pending')
     setCodeGenerationMessage('')
+    setLastProblem(null)
   }, [])
 
   // Load the fixed objective graph on mount.
@@ -621,6 +655,7 @@ export function ObjectivesPage() {
             void (async () => {
               try {
                 const state = await api.getObjectiveSession(id)
+                setLinkedExperimentId(state.linked_experiment_id || null)
                 if (state.report) {
                   setReport(state.report)
                   setBusy(false)
@@ -694,6 +729,8 @@ export function ObjectivesPage() {
           updates: state.updates?.length ?? 0,
         })
         setRunId(prior)
+        setLastProblem(state.problem_statement || null)
+        setLinkedExperimentId(state.linked_experiment_id || null)
 
         if (state.running) {
           // Still running: the stream replays every stored frame itself, so
@@ -742,6 +779,7 @@ export function ObjectivesPage() {
       trace('▶ Generate & Verify clicked', { problem })
       resetRun()
       setBusy(true)
+      setLastProblem(problem)
       pushLog('client', `Starting verification for: "${problem.slice(0, 80)}..."`)
 
       // Auto-resolve workspace — the user should not need to select one.
@@ -786,6 +824,7 @@ export function ObjectivesPage() {
       }
 
       setRunId(accepted.run_id)
+      setLinkedExperimentId(null)
       rememberObjectiveRun(accepted.run_id)
       // Fresh session: reset the reconnect budget so a new run always gets
       // up to `max` reconnection attempts before falling back to polling.
@@ -827,6 +866,7 @@ export function ObjectivesPage() {
     unsubscribeRef.current = null
     resetRun()
     setRunId(null)
+    setLinkedExperimentId(null)
     forgetObjectiveRun()
   }, [resetRun])
 
@@ -933,7 +973,7 @@ export function ObjectivesPage() {
               }}
               title="Inspect the recorded design decisions and evidence"
             >
-              <ShieldCheck size={12} /> Evidence
+                  <ShieldCheck size={12} /> Evidence
             </Link>
           </div>
         </div>
@@ -945,7 +985,8 @@ export function ObjectivesPage() {
       <ProblemInput
         onSubmit={(p) => void startVerification(p)}
         busy={busy}
-        compact={Boolean(runId)}
+        compact={Boolean(runId) || busy}
+        prompt={lastProblem || report?.problem_statement || null}
         hint={
           runId
             ? 'A new query starts a new session and replaces the one above.'

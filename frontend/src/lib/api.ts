@@ -375,10 +375,35 @@ export interface FreshSessionAccepted {
   stream_url: string
 }
 
+/**
+ * GET /objective-verification/sessions — one cheap listing row for a session
+ * the caller created. Discovery only: the verbatim problem statement plus
+ * lifecycle fields; frames and full report come from the detail endpoint.
+ * Mirrors app/schemas/objective_verification.py SessionSummary.
+ */
+export interface ObjectiveSessionSummary {
+  run_id: string
+  experiment_id: string
+  linked_experiment_id: string | null
+  /** What the caller asked, verbatim as submitted. */
+  problem_statement: string
+  dataset_name: string
+  config: Dict
+  status: string
+  overall_status: string | null
+  overall_confidence: number | null
+  decision_count: number
+  stage_count: number
+  created_at: string | null
+  completed_at: string | null
+  error: string | null
+}
+
 /** GET /sessions/{run_id} — reconnect path, replays stored frames. */
 export interface ObjectiveSessionState {
   run_id: string
   experiment_id: string
+  linked_experiment_id?: string | null
   status: string
   problem_statement: string
   dataset_name: string
@@ -992,6 +1017,25 @@ export const api = {
   getObjectiveSession: (runId: string) =>
     request<ObjectiveSessionState>(
       `/objective-verification/sessions/${encodeURIComponent(runId)}`,
+    ),
+
+  /**
+   * The caller's recent verification sessions, newest first. Cheap listing
+   * rows used for discovery (Project Summary); no frames or report payload.
+   */
+  listObjectiveSessions: (limit = 20) =>
+    request<ObjectiveSessionSummary[]>(
+      `/objective-verification/sessions${qs({ limit })}`,
+    ),
+
+  /** Link a completed pipeline experiment to a verification session. */
+  linkExperiment: (runId: string, experimentId: string) =>
+    request<{ run_id: string; linked_experiment_id: string; status: string }>(
+      `/objective-verification/sessions/${encodeURIComponent(runId)}/link-experiment`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ experiment_id: experimentId }),
+      },
     ),
 
   /**

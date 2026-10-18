@@ -19,6 +19,9 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from app.engine.memory.storage import MemoryStorageService
+from app.models.memory import MemoryType
+
 logger = logging.getLogger("autosage.evidence")
 
 # decision_type must be a type the built-in claim extractors understand.
@@ -352,6 +355,62 @@ async def persist_workflow_evidence(
                     evidence_count += 1
 
             await session.commit()
+
+            # Store a successful experiment outcome in experience memory so the
+            # system can learn from verified runs (Objective 4: experience memory).
+            if str(final_state.get("status")) != "FAILED":
+                try:
+                    ml_result = dict(final_state.get("ml_result") or {})
+                    primary_metric = str(final_state.get("primary_metric") or "")
+                    primary_score = ml_result.get("primary_score")
+                    if primary_score is not None:
+                        memory_storage = MemoryStorageService(session)
+                        await memory_storage.store_memory(
+                            workspace_id=experiment.workspace_id,
+                            memory_type=MemoryType.SUCCESSFUL_EXPERIMENT,
+                            task_type=str(
+                                (final_state.get("config") or {}).get("task_type")
+                                or "classification"
+                            ),
+                            dataset_fingerprint={
+                                "name": str(
+                                    (final_state.get("dataset_info") or {}).get("name")
+                                    or ""
+                                ),
+                                "n_rows": int(
+                                    (final_state.get("dataset_info") or {}).get("n_rows")
+                                    or 0
+                                ),
+                                "n_features": int(
+                                    (final_state.get("dataset_info") or {}).get("n_features")
+                                    or 0
+                                ),
+                            },
+                            solution_strategy=(
+                                f"Selected {ml_result.get('selected_model')} "
+                                f"with preprocessing; primary metric {primary_metric}"
+                            ),
+                            experiment_id=exp_uuid,
+                            source_run_id=run.id,
+                            achieved_metric_value=float(primary_score),
+                            metric_name=primary_metric,
+                            memory_metadata={
+                                "selected_model": ml_result.get("selected_model"),
+                                "models_evaluated": ml_result.get("models_evaluated"),
+                                "baseline_score": ml_result.get("baseline", {}).get("score"),
+                                "verification_passed": bool(
+                                    final_state.get("verification_passed")
+                                ),
+                            },
+                            generate_embedding=False,  # no embedding provider configured locally
+                        )
+                        await session.commit()
+                except Exception:  # noqa: BLE001 - memory must never fail a run
+                    logger.exception(
+                        "experience_memory_store_failed",
+                        extra={"experiment_id": experiment_id},
+                    )
+
             result = {
                 "run_id": str(run.id),
                 "decisions": len(drafts),

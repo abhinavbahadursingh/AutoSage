@@ -177,7 +177,7 @@ export function HomePage() {
                 {authError ? 'auth error' : authReady ? `${STAGE_META.length} stages · engine online` : 'connecting…'}
               </span>
               <MagneticButton
-                onClick={() => void demoLogin()}
+                onClick={() => navigate('/objectives')}
                 disabled={loginBusy}
                 className="btn-pill btn-ghost text-[14px]"
                 style={{
@@ -189,7 +189,7 @@ export function HomePage() {
                 {loginBusy ? (
                   <><Loader2 size={14} className="animate-spin" /> Logging in…</>
                 ) : user ? (
-                  <>Open Workspace <ArrowRight size={14} /></>
+                  <>Open Objective <ArrowRight size={14} /></>
                 ) : (
                   <><Zap size={14} /> Demo Login</>
                 )}
